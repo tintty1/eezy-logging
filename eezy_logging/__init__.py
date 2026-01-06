@@ -56,8 +56,6 @@ from eezy_logging.serializer import serialize_record
 from eezy_logging.sinks import ElasticsearchSink, Sink
 from eezy_logging.worker import Worker
 
-__version__ = "0.1.0"
-
 __all__ = [
     # Main handler
     "EezyHandler",
@@ -73,5 +71,4 @@ __all__ = [
     "Worker",
     "serialize_record",
     # Version
-    "__version__",
 ]

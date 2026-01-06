@@ -39,10 +39,16 @@ def is_elasticsearch_available() -> bool:
     try:
         from elasticsearch import Elasticsearch
 
-        client = Elasticsearch([ES_HOST])
-        client.info()
+        # ES 8.x may need SSL verification disabled for local testing
+        client = Elasticsearch(
+            [ES_HOST],
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        info = client.info()
         client.close()
-        return True
+        # Verify it's actually Elasticsearch (not OpenSearch)
+        return "version" in info and "lucene_version" in info.get("version", {})
     except Exception:
         return False
 
@@ -52,10 +58,14 @@ def is_opensearch_available() -> bool:
     try:
         from opensearchpy import OpenSearch
 
-        client = OpenSearch([OPENSEARCH_HOST])
-        client.info()
+        client = OpenSearch(
+            [OPENSEARCH_HOST],
+            verify_certs=False,
+            ssl_show_warn=False,
+        )
+        info = client.info()
         client.close()
-        return True
+        return "version" in info
     except Exception:
         return False
 
@@ -77,7 +87,11 @@ def es_client():
     """Create an Elasticsearch client for testing."""
     from elasticsearch import Elasticsearch
 
-    client = Elasticsearch([ES_HOST])
+    client = Elasticsearch(
+        [ES_HOST],
+        verify_certs=False,
+        ssl_show_warn=False,
+    )
     yield client
     client.close()
 
@@ -87,7 +101,11 @@ def opensearch_client():
     """Create an OpenSearch client for testing."""
     from opensearchpy import OpenSearch
 
-    client = OpenSearch([OPENSEARCH_HOST])
+    client = OpenSearch(
+        [OPENSEARCH_HOST],
+        verify_certs=False,
+        ssl_show_warn=False,
+    )
     yield client
     client.close()
 
