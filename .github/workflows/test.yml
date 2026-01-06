@@ -115,7 +115,7 @@ jobs:
           echo "Elasticsearch is ready"
 
       - name: Run Elasticsearch integration tests
-        run: uv run pytest tests/test_elasticsearch_integration.py -v -k "Elasticsearch"
+        run: uv run pytest tests/test_elasticsearch_integration.py -v
         env:
           EEZY_TEST_ES_HOST: http://localhost:9200
 
@@ -157,6 +157,6 @@ jobs:
           echo "OpenSearch is ready"
 
       - name: Run OpenSearch integration tests
-        run: uv run pytest tests/test_elasticsearch_integration.py -v -k "OpenSearch"
+        run: uv run pytest tests/test_opensearch_integration.py -v
         env:
           EEZY_TEST_OPENSEARCH_HOST: http://localhost:9201
