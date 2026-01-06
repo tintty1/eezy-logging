@@ -171,6 +171,8 @@ sink = ElasticsearchSink(client=client, index_prefix="myapp-logs")
 - `EEZY_ES_API_KEY`
 - `EEZY_ES_VERIFY_CERTS` (default: `true`)
 
+**Supported versions**: Elasticsearch 7.x, 8.x, and 9.x are supported. The library automatically detects the installed client version and uses the appropriate APIs.
+
 > **Note**: For Elastic Cloud deployments, create your own client with the `cloud_id` parameter and pass it to the sink.
 
 #### OpenSearchSink
