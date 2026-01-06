@@ -184,15 +184,17 @@ class TestElasticsearchSinkIntegration:
 
         try:
             sink.setup()
-            sink.write_batch([
-                {
-                    "@timestamp": "2026-01-06T12:00:00.000000+00:00",
-                    "message": "Test log message",
-                    "level": "INFO",
-                    "logger": "test",
-                    "metadata": {"hostname": "test-host"},
-                }
-            ])
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": "Test log message",
+                        "level": "INFO",
+                        "logger": "test",
+                        "metadata": {"hostname": "test-host"},
+                    }
+                ]
+            )
 
             docs = wait_for_docs(es_client, f"{unique_index_prefix}-*", 1)
             assert len(docs) == 1
@@ -241,17 +243,19 @@ class TestElasticsearchSinkIntegration:
 
         try:
             sink.setup()
-            sink.write_batch([
-                {
-                    "@timestamp": "2026-01-06T12:00:00.000000+00:00",
-                    "message": "User action",
-                    "level": "INFO",
-                    "logger": "test",
-                    "user_id": 12345,
-                    "action": "login",
-                    "ip_address": "192.168.1.100",
-                }
-            ])
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": "User action",
+                        "level": "INFO",
+                        "logger": "test",
+                        "user_id": 12345,
+                        "action": "login",
+                        "ip_address": "192.168.1.100",
+                    }
+                ]
+            )
 
             docs = wait_for_docs(es_client, f"{unique_index_prefix}-*", 1)
             assert docs[0]["user_id"] == 12345
@@ -271,21 +275,23 @@ class TestElasticsearchSinkIntegration:
 
         try:
             sink.setup()
-            sink.write_batch([
-                {
-                    "@timestamp": "2026-01-06T12:00:00.000000+00:00",
-                    "message": "Test message",
-                    "level": "WARNING",
-                    "logger": "myapp.module",
-                    "metadata": {
-                        "hostname": "pod-abc123",
-                        "levelno": 30,
-                        "filename": "module.py",
-                        "funcName": "my_function",
-                        "lineno": 42,
-                    },
-                }
-            ])
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": "Test message",
+                        "level": "WARNING",
+                        "logger": "myapp.module",
+                        "metadata": {
+                            "hostname": "pod-abc123",
+                            "levelno": 30,
+                            "filename": "module.py",
+                            "funcName": "my_function",
+                            "lineno": 42,
+                        },
+                    }
+                ]
+            )
 
             docs = wait_for_docs(es_client, f"{unique_index_prefix}-*", 1)
             metadata = docs[0]["metadata"]
@@ -343,9 +349,7 @@ class TestElasticsearchSinkIntegration:
             cleanup_template(es_client, f"{unique_index_prefix}-template")
             cleanup_ilm_policy(es_client, policy_name)
 
-    def test_full_handler_integration(
-        self, es_client: Elasticsearch, unique_index_prefix: str
-    ):
+    def test_full_handler_integration(self, es_client: Elasticsearch, unique_index_prefix: str):
         """Test full integration with EezyHandler."""
         sink = ElasticsearchSink(
             client=es_client,
@@ -405,15 +409,17 @@ class TestOpenSearchSinkIntegration:
 
         try:
             sink.setup()
-            sink.write_batch([
-                {
-                    "@timestamp": "2026-01-06T12:00:00.000000+00:00",
-                    "message": "Test log message",
-                    "level": "INFO",
-                    "logger": "test",
-                    "metadata": {"hostname": "test-host"},
-                }
-            ])
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": "Test log message",
+                        "level": "INFO",
+                        "logger": "test",
+                        "metadata": {"hostname": "test-host"},
+                    }
+                ]
+            )
 
             docs = wait_for_docs(opensearch_client, f"{unique_index_prefix}-*", 1)
             assert len(docs) == 1
@@ -536,9 +542,7 @@ class TestElasticsearchRollover:
             cleanup_template(es_client, f"{unique_index_prefix}-template")
             cleanup_ilm_policy(es_client, policy_name)
 
-    def test_rollover_with_conditions(
-        self, es_client: Elasticsearch, unique_index_prefix: str
-    ):
+    def test_rollover_with_conditions(self, es_client: Elasticsearch, unique_index_prefix: str):
         """Test rollover API with max_docs condition (simulates ILM behavior)."""
         alias_name = unique_index_prefix
 
@@ -634,9 +638,7 @@ class TestElasticsearchRollover:
             )
 
             # Verify documents are in correct indices
-            old_docs = es_client.search(
-                index=initial_index, body={"query": {"match_all": {}}}
-            )
+            old_docs = es_client.search(index=initial_index, body={"query": {"match_all": {}}})
             new_docs = es_client.search(index=new_index, body={"query": {"match_all": {}}})
 
             assert old_docs["hits"]["total"]["value"] == 1
@@ -701,9 +703,7 @@ class TestOpenSearchRollover:
             old_docs = opensearch_client.search(
                 index=initial_index, body={"query": {"match_all": {}}}
             )
-            new_docs = opensearch_client.search(
-                index=new_index, body={"query": {"match_all": {}}}
-            )
+            new_docs = opensearch_client.search(index=new_index, body={"query": {"match_all": {}}})
 
             assert old_docs["hits"]["total"]["value"] == 1
             assert new_docs["hits"]["total"]["value"] == 1
@@ -737,13 +737,15 @@ class TestOpenSearchRollover:
             sink.setup()
 
             # Write a document to create an index
-            sink.write_batch([
-                {
-                    "@timestamp": datetime.now(UTC).isoformat(),
-                    "message": "Test message",
-                    "level": "INFO",
-                }
-            ])
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": datetime.now(UTC).isoformat(),
+                        "message": "Test message",
+                        "level": "INFO",
+                    }
+                ]
+            )
 
             # Wait for ISM to attach
             time.sleep(2)
@@ -765,7 +767,6 @@ class TestOpenSearchRollover:
                 opensearch_client, f"{unique_index_prefix}-template", is_opensearch=True
             )
             cleanup_ism_policy(opensearch_client, policy_name)
-
 
     def test_ism_policy_without_delete(
         self, opensearch_client: OpenSearch, unique_index_prefix: str

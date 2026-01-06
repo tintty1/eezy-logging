@@ -89,8 +89,7 @@ class TestDequeQueue:
                 queue.put({"thread": threading.current_thread().name, "index": i})
 
         threads = [
-            threading.Thread(target=producer, name=f"producer-{i}")
-            for i in range(num_producers)
+            threading.Thread(target=producer, name=f"producer-{i}") for i in range(num_producers)
         ]
 
         for t in threads:
