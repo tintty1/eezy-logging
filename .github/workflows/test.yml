@@ -82,14 +82,14 @@ jobs:
     strategy:
       matrix:
         include:
-          - es-version: "7.17.28"
-            es-image: "docker.elastic.co/elasticsearch/elasticsearch:7.17.28"
+          - es-version: "7.17.26"
+            es-image: "elasticsearch:7.17.26"
             client-version: "elasticsearch>=7.0,<8.0"
-          - es-version: "8.17.0"
-            es-image: "docker.elastic.co/elasticsearch/elasticsearch:8.17.0"
+          - es-version: "8.19.9"
+            es-image: "elasticsearch:8.19.9"
             client-version: "elasticsearch>=8.0,<9.0"
-          - es-version: "9.0.0"
-            es-image: "elasticsearch:9.0.0"
+          - es-version: "9.2.3"
+            es-image: "elasticsearch:9.2.3"
             client-version: "elasticsearch>=9.0,<10.0"
 
     services:
