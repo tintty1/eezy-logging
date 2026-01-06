@@ -212,7 +212,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "elasticsearch", marker = "extra == 'elasticsearch'", specifier = ">=8.0" },
+    { name = "elasticsearch", marker = "extra == 'elasticsearch'", specifier = ">=7.0" },
     { name = "opensearch-py", marker = "extra == 'opensearch'", specifier = ">=2.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0" },
 ]

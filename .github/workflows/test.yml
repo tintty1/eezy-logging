@@ -79,10 +79,22 @@ jobs:
 
   elasticsearch-tests:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - es-version: "7.17.28"
+            es-image: "docker.elastic.co/elasticsearch/elasticsearch:7.17.28"
+            client-version: "elasticsearch>=7.0,<8.0"
+          - es-version: "8.17.0"
+            es-image: "docker.elastic.co/elasticsearch/elasticsearch:8.17.0"
+            client-version: "elasticsearch>=8.0,<9.0"
+          - es-version: "9.0.0"
+            es-image: "elasticsearch:9.0.0"
+            client-version: "elasticsearch>=9.0,<10.0"
 
     services:
       elasticsearch:
-        image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+        image: ${{ matrix.es-image }}
         ports:
           - 9200:9200
         env:
@@ -104,7 +116,9 @@ jobs:
           version: "latest"
 
       - name: Install dependencies
-        run: uv sync --all-extras
+        run: |
+          uv sync --all-extras
+          uv pip install "${{ matrix.client-version }}"
 
       - name: Wait for Elasticsearch
         run: |

@@ -19,7 +19,7 @@ dependencies = []
 
 [project.optional-dependencies]
 redis = ["redis>=5.0"]
-elasticsearch = ["elasticsearch>=8.0"]
+elasticsearch = ["elasticsearch>=7.0"]
 opensearch = ["opensearch-py>=2.0"]
 
 [build-system]

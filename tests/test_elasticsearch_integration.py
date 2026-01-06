@@ -86,10 +86,22 @@ def cleanup_indices(client: Any, index_pattern: str) -> None:
 
 
 def cleanup_template(client: Any, template_name: str) -> None:
-    """Delete index template."""
+    """Delete index template (both composable and legacy)."""
+    # Try composable template first (ES 8.x+)
     try:
-        # Use .options() to avoid deprecation warning
-        client.options(ignore_status=404).indices.delete_index_template(name=template_name)
+        # Use options() if available (ES 8.x+), otherwise use ignore parameter (ES 7.x)
+        if hasattr(client, "options"):
+            client.options(ignore_status=404).indices.delete_index_template(name=template_name)
+        else:
+            client.indices.delete_index_template(name=template_name, ignore=[404])
+    except Exception:
+        pass
+    # Also try legacy template (ES 7.x)
+    try:
+        if hasattr(client, "options"):
+            client.options(ignore_status=404).indices.delete_template(name=template_name)
+        else:
+            client.indices.delete_template(name=template_name, ignore=[404])
     except Exception:
         pass
 
@@ -255,12 +267,17 @@ class TestElasticsearchSinkIntegration:
         try:
             sink.setup()
 
-            # Check template exists
+            # Check template exists - try composable first (ES 8.x+), then legacy (ES 7.x)
             template_name = f"{unique_index_prefix}-template"
-            response = es_client.indices.get_index_template(name=template_name)
-            templates = response.get("index_templates", [])
-            assert len(templates) == 1
-            assert templates[0]["name"] == template_name
+            try:
+                response = es_client.indices.get_index_template(name=template_name)
+                templates = response.get("index_templates", [])
+                assert len(templates) == 1
+                assert templates[0]["name"] == template_name
+            except Exception:
+                # Fall back to legacy template API (ES 7.x)
+                response = es_client.indices.get_template(name=template_name)
+                assert template_name in response
         finally:
             cleanup_template(es_client, f"{unique_index_prefix}-template")
 

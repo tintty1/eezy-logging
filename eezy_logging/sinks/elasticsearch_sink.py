@@ -285,7 +285,11 @@ class ElasticsearchSink(Sink):
             _logger.debug("eezy-logging: Could not create ILM policy: %s", e)
 
     def _create_index_template(self, client: Elasticsearch) -> None:
-        """Create index template for log indices."""
+        """Create index template for log indices.
+
+        Uses composable templates (put_index_template) for ES 8.x+ and falls back
+        to legacy templates (put_template) for ES 7.x.
+        """
         template_name = f"{self._index_prefix}-template"
 
         settings: dict[str, Any] = {
@@ -296,20 +300,33 @@ class ElasticsearchSink(Sink):
         if self._setup_ilm_policy:
             settings["index.lifecycle.name"] = self._ilm_policy_name
 
-        template_body: dict[str, Any] = {
-            "index_patterns": [f"{self._index_prefix}-*"],
-            "template": {
-                "settings": settings,
-                "mappings": LOG_MAPPINGS,
-            },
-            "priority": 100,
-        }
-
         try:
+            template_body: dict[str, Any] = {
+                "index_patterns": [f"{self._index_prefix}-*"],
+                "template": {
+                    "settings": settings,
+                    "mappings": LOG_MAPPINGS,
+                },
+                "priority": 100,
+            }
             client.indices.put_index_template(name=template_name, body=template_body)
             _logger.debug("eezy-logging: Created index template '%s'", template_name)
         except Exception as e:
-            _logger.warning("eezy-logging: Could not create index template: %s", e)
+            _logger.debug(
+                "eezy-logging: Could not create index template: %s. Fall back to legacy template.",
+                e,
+            )
+            # Fall back to legacy template API
+            try:
+                legacy_body: dict[str, Any] = {
+                    "index_patterns": [f"{self._index_prefix}-*"],
+                    "settings": settings,
+                    "mappings": LOG_MAPPINGS,
+                }
+                client.indices.put_template(name=template_name, body=legacy_body)
+                _logger.debug("eezy-logging: Created legacy index template '%s'", template_name)
+            except Exception as legacy_error:
+                _logger.warning("eezy-logging: Could not create index template: %s", legacy_error)
 
     def _get_index_name(self) -> str:
         """Generate the current index name based on date format."""
@@ -339,7 +356,7 @@ class ElasticsearchSink(Sink):
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
             try:
-                response = client.bulk(operations=bulk_body, refresh=False)
+                response = client.bulk(body=bulk_body, refresh=False)
                 if response.get("errors"):
                     for item in response.get("items", []):
                         if "error" in item.get("index", {}):
