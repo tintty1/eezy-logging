@@ -129,7 +129,7 @@ jobs:
           echo "Elasticsearch is ready"
 
       - name: Run Elasticsearch integration tests
-        run: uv run pytest tests/test_elasticsearch_integration.py -v
+        run: uv run --no-sync pytest tests/test_elasticsearch_integration.py -v
         env:
           EEZY_TEST_ES_HOST: http://localhost:9200
 

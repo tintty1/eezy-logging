@@ -32,6 +32,7 @@ ES_HOST = os.environ.get("EEZY_TEST_ES_HOST", "http://localhost:9200")
 @pytest.fixture
 def es_client():
     """Create an Elasticsearch client for testing."""
+    import elasticsearch
     from elasticsearch import Elasticsearch
 
     client = Elasticsearch(
@@ -39,6 +40,17 @@ def es_client():
         verify_certs=False,
         ssl_show_warn=False,
     )
+
+    # Print version info for debugging CI issues
+    client_version = elasticsearch.__version__
+    try:
+        info = client.info()
+        server_version = info["version"]["number"]
+    except Exception as e:
+        server_version = f"unknown (error: {e})"
+
+    print(f"\n[ES Version Info] Client: {client_version}, Server: {server_version}")
+
     yield client
     client.close()
 
