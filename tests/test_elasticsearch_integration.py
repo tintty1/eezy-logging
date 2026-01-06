@@ -121,9 +121,22 @@ def cleanup_template(client: Any, template_name: str) -> None:
 def cleanup_ilm_policy(client: Any, policy_name: str) -> None:
     """Delete ILM policy."""
     try:
-        client.ilm.delete_lifecycle(name=policy_name)
+        # ES 8.x+ uses 'name', ES 7.x uses 'policy'
+        try:
+            client.ilm.delete_lifecycle(name=policy_name)
+        except TypeError:
+            client.ilm.delete_lifecycle(policy=policy_name)
     except Exception:
         pass
+
+
+def get_ilm_policy(client: Any, policy_name: str) -> dict:
+    """Get ILM policy, handling API differences between ES versions."""
+    # ES 8.x+ uses 'name', ES 7.x uses 'policy'
+    try:
+        return client.ilm.get_lifecycle(name=policy_name)
+    except TypeError:
+        return client.ilm.get_lifecycle(policy=policy_name)
 
 
 def cleanup_alias(client: Any, alias_name: str) -> None:
@@ -307,7 +320,7 @@ class TestElasticsearchSinkIntegration:
             sink.setup()
 
             # Check ILM policy exists
-            response = es_client.ilm.get_lifecycle(name=policy_name)
+            response = get_ilm_policy(es_client, policy_name)
             assert policy_name in response
             policy = response[policy_name]["policy"]
             assert "phases" in policy
@@ -388,7 +401,7 @@ class TestElasticsearchRollover:
             sink.setup()
 
             # Verify ILM policy has correct rollover configuration
-            response = es_client.ilm.get_lifecycle(name=policy_name)
+            response = get_ilm_policy(es_client, policy_name)
             policy = response[policy_name]["policy"]
             rollover = policy["phases"]["hot"]["actions"]["rollover"]
 
@@ -535,7 +548,7 @@ class TestCustomILMPolicy:
             sink.setup()
 
             # Check ILM policy exists with correct settings
-            response = es_client.ilm.get_lifecycle(name=policy_name)
+            response = get_ilm_policy(es_client, policy_name)
             assert policy_name in response
             policy = response[policy_name]["policy"]
             phases = policy["phases"]
@@ -580,7 +593,7 @@ class TestCustomILMPolicy:
         try:
             sink.setup()
 
-            response = es_client.ilm.get_lifecycle(name=policy_name)
+            response = get_ilm_policy(es_client, policy_name)
             policy = response[policy_name]["policy"]
             phases = policy["phases"]
 
@@ -611,7 +624,7 @@ class TestCustomILMPolicy:
         try:
             sink.setup()
 
-            response = es_client.ilm.get_lifecycle(name=policy_name)
+            response = get_ilm_policy(es_client, policy_name)
             policy = response[policy_name]["policy"]
             phases = policy["phases"]
 

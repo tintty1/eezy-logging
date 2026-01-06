@@ -279,7 +279,11 @@ class ElasticsearchSink(Sink):
         policy_body = self._ilm_policy.to_policy_body()
 
         try:
-            client.ilm.put_lifecycle(name=self._ilm_policy_name, body=policy_body)
+            # ES 8.x+ uses 'name', ES 7.x uses 'policy'
+            try:
+                client.ilm.put_lifecycle(name=self._ilm_policy_name, body=policy_body)
+            except TypeError:
+                client.ilm.put_lifecycle(policy=self._ilm_policy_name, body=policy_body)
             _logger.debug("eezy-logging: Created ILM policy '%s'", self._ilm_policy_name)
         except Exception as e:
             _logger.debug("eezy-logging: Could not create ILM policy: %s", e)
