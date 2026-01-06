@@ -29,6 +29,21 @@ if TYPE_CHECKING:
 ES_HOST = os.environ.get("EEZY_TEST_ES_HOST", "http://localhost:9200")
 
 
+def _get_es_client_major_version() -> int:
+    """Get the major version of the installed elasticsearch client."""
+    import elasticsearch
+
+    version = elasticsearch.__version__
+    if isinstance(version, tuple):
+        return version[0]
+    # Handle string version like "8.0.0"
+    return int(str(version).split(".")[0])
+
+
+# Cache the client major version
+ES_CLIENT_MAJOR_VERSION = _get_es_client_major_version()
+
+
 @pytest.fixture
 def es_client():
     """Create an Elasticsearch client for testing."""
@@ -101,8 +116,7 @@ def cleanup_template(client: Any, template_name: str) -> None:
     """Delete index template (both composable and legacy)."""
     # Try composable template first (ES 8.x+)
     try:
-        # Use options() if available (ES 8.x+), otherwise use ignore parameter (ES 7.x)
-        if hasattr(client, "options"):
+        if ES_CLIENT_MAJOR_VERSION >= 8:
             client.options(ignore_status=404).indices.delete_index_template(name=template_name)
         else:
             client.indices.delete_index_template(name=template_name, ignore=[404])
@@ -110,7 +124,7 @@ def cleanup_template(client: Any, template_name: str) -> None:
         pass
     # Also try legacy template (ES 7.x)
     try:
-        if hasattr(client, "options"):
+        if ES_CLIENT_MAJOR_VERSION >= 8:
             client.options(ignore_status=404).indices.delete_template(name=template_name)
         else:
             client.indices.delete_template(name=template_name, ignore=[404])
@@ -121,10 +135,9 @@ def cleanup_template(client: Any, template_name: str) -> None:
 def cleanup_ilm_policy(client: Any, policy_name: str) -> None:
     """Delete ILM policy."""
     try:
-        # ES 8.x+ uses 'name', ES 7.x uses 'policy'
-        try:
+        if ES_CLIENT_MAJOR_VERSION >= 8:
             client.ilm.delete_lifecycle(name=policy_name)
-        except TypeError:
+        else:
             client.ilm.delete_lifecycle(policy=policy_name)
     except Exception:
         pass
@@ -132,10 +145,9 @@ def cleanup_ilm_policy(client: Any, policy_name: str) -> None:
 
 def get_ilm_policy(client: Any, policy_name: str) -> dict:
     """Get ILM policy, handling API differences between ES versions."""
-    # ES 8.x+ uses 'name', ES 7.x uses 'policy'
-    try:
+    if ES_CLIENT_MAJOR_VERSION >= 8:
         return client.ilm.get_lifecycle(name=policy_name)
-    except TypeError:
+    else:
         return client.ilm.get_lifecycle(policy=policy_name)
 
 

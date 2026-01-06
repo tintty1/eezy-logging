@@ -7,6 +7,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from eezy_logging.sinks.base import Sink
@@ -23,6 +24,24 @@ ENV_ES_API_KEY = "EEZY_ES_API_KEY"
 ENV_ES_VERIFY_CERTS = "EEZY_ES_VERIFY_CERTS"
 
 DEFAULT_ES_HOST = "http://localhost:9200"
+
+
+@lru_cache(maxsize=1)
+def _get_es_client_major_version() -> int:
+    """Get the major version of the installed elasticsearch client.
+
+    Result is cached since the version won't change during runtime.
+    """
+    try:
+        import elasticsearch
+
+        version = elasticsearch.__version__
+        if isinstance(version, tuple):
+            return version[0]
+        # Handle string version like "8.0.0"
+        return int(str(version).split(".")[0])
+    except Exception:
+        return 8  # Default to ES 8.x behavior
 
 
 @dataclass
@@ -279,10 +298,11 @@ class ElasticsearchSink(Sink):
         policy_body = self._ilm_policy.to_policy_body()
 
         try:
-            # ES 8.x+ uses 'name', ES 7.x uses 'policy'
-            try:
+            es_major_version = _get_es_client_major_version()
+            if es_major_version >= 8:
                 client.ilm.put_lifecycle(name=self._ilm_policy_name, body=policy_body)
-            except TypeError:
+            else:
+                # ES 7.x uses 'policy' parameter instead of 'name'
                 client.ilm.put_lifecycle(policy=self._ilm_policy_name, body=policy_body)
             _logger.debug("eezy-logging: Created ILM policy '%s'", self._ilm_policy_name)
         except Exception as e:
@@ -291,8 +311,8 @@ class ElasticsearchSink(Sink):
     def _create_index_template(self, client: Elasticsearch) -> None:
         """Create index template for log indices.
 
-        Uses composable templates (put_index_template) for ES 8.x+ and falls back
-        to legacy templates (put_template) for ES 7.x.
+        Uses composable templates (put_index_template) for ES 8.x+ and
+        legacy templates (put_template) for ES 7.x.
         """
         template_name = f"{self._index_prefix}-template"
 
@@ -304,23 +324,25 @@ class ElasticsearchSink(Sink):
         if self._setup_ilm_policy:
             settings["index.lifecycle.name"] = self._ilm_policy_name
 
-        try:
-            template_body: dict[str, Any] = {
-                "index_patterns": [f"{self._index_prefix}-*"],
-                "template": {
-                    "settings": settings,
-                    "mappings": LOG_MAPPINGS,
-                },
-                "priority": 100,
-            }
-            client.indices.put_index_template(name=template_name, body=template_body)
-            _logger.debug("eezy-logging: Created index template '%s'", template_name)
-        except Exception as e:
-            _logger.debug(
-                "eezy-logging: Could not create index template: %s. Fall back to legacy template.",
-                e,
-            )
-            # Fall back to legacy template API
+        es_major_version = _get_es_client_major_version()
+
+        if es_major_version >= 8:
+            # ES 8.x+ uses composable templates
+            try:
+                template_body: dict[str, Any] = {
+                    "index_patterns": [f"{self._index_prefix}-*"],
+                    "template": {
+                        "settings": settings,
+                        "mappings": LOG_MAPPINGS,
+                    },
+                    "priority": 100,
+                }
+                client.indices.put_index_template(name=template_name, body=template_body)
+                _logger.debug("eezy-logging: Created index template '%s'", template_name)
+            except Exception as e:
+                _logger.warning("eezy-logging: Could not create index template: %s", e)
+        else:
+            # ES 7.x uses legacy templates
             try:
                 legacy_body: dict[str, Any] = {
                     "index_patterns": [f"{self._index_prefix}-*"],
@@ -329,8 +351,8 @@ class ElasticsearchSink(Sink):
                 }
                 client.indices.put_template(name=template_name, body=legacy_body)
                 _logger.debug("eezy-logging: Created legacy index template '%s'", template_name)
-            except Exception as legacy_error:
-                _logger.warning("eezy-logging: Could not create index template: %s", legacy_error)
+            except Exception as e:
+                _logger.warning("eezy-logging: Could not create index template: %s", e)
 
     def _get_index_name(self) -> str:
         """Generate the current index name based on date format."""
