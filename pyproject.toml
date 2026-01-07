@@ -1,6 +1,7 @@
 [project]
 name = "eezy-logging"
 description = "A non-blocking, queue-based Python logging library for shipping logs to Elasticsearch and other destinations"
+dynamic = ["version"]
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
