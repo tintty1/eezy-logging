@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 from eezy_logging.queues.memory import InMemoryQueue
-from eezy_logging.sinks.base import Sink
+from eezy_logging.sinks.base import Sink, WriteResult
 from eezy_logging.worker import Worker
 
 
@@ -20,10 +20,11 @@ class MockSink(Sink):
     def setup(self) -> None:
         self.setup_called = True
 
-    def write_batch(self, records: list[dict[str, Any]]) -> None:
+    def write_batch(self, records: list[dict[str, Any]]) -> WriteResult:
         if self.write_delay:
             time.sleep(self.write_delay)
         self.batches.append(records)
+        return WriteResult.ok()
 
     def close(self) -> None:
         self.close_called = True
@@ -114,6 +115,7 @@ class TestWorker:
         worker = Worker(queue=queue, sink=sink)
 
         worker.start()
+        assert worker._thread is not None
         assert worker._thread.daemon is True
         worker.stop()
 
@@ -169,14 +171,14 @@ class TestWorkerErrorHandling:
 
         original_write = sink.write_batch
 
-        def failing_write(records):
+        def failing_write(records: list[dict[str, Any]]) -> WriteResult:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise Exception("Simulated error")
-            original_write(records)
+            return original_write(records)
 
-        sink.write_batch = failing_write
+        sink.write_batch = failing_write  # type: ignore[method-assign]
 
         worker = Worker(queue=queue, sink=sink, batch_size=5, flush_interval=0.1)
         worker.start()
@@ -189,4 +191,167 @@ class TestWorkerErrorHandling:
 
         # Second batch should have been processed despite first error
         assert call_count >= 2
+        worker.stop()
+
+
+class TestWorkerRetry:
+    """Tests for Worker non-blocking retry behavior."""
+
+    def test_worker_retries_failed_records(self):
+        """Test that worker retries records returned as failed."""
+        queue = InMemoryQueue()
+        sink = MockSink()
+        attempt_count = 0
+
+        def failing_then_success(records: list[dict[str, Any]]) -> WriteResult:
+            nonlocal attempt_count
+            attempt_count += 1
+            if attempt_count == 1:
+                # First attempt fails
+                return WriteResult.failure(records, "Temporary error")
+            # Subsequent attempts succeed
+            sink.batches.append(records)
+            return WriteResult.ok()
+
+        sink.write_batch = failing_then_success  # type: ignore[method-assign]
+
+        worker = Worker(
+            queue=queue,
+            sink=sink,
+            batch_size=5,
+            flush_interval=0.1,
+            retry_base_delay=0.1,  # Fast retries for testing
+        )
+        worker.start()
+
+        # Add records
+        for i in range(5):
+            queue.put({"index": i})
+
+        # Wait for initial attempt + retry
+        time.sleep(0.5)
+
+        worker.stop()
+
+        # Records should have been written after retry
+        assert sink.total_records == 5
+        assert attempt_count == 2
+
+    def test_worker_drops_records_after_max_retries(self):
+        """Test that records are dropped after max retries exceeded."""
+        queue = InMemoryQueue()
+        sink = MockSink()
+        attempt_count = 0
+
+        def always_fail(records: list[dict[str, Any]]) -> WriteResult:
+            nonlocal attempt_count
+            attempt_count += 1
+            return WriteResult.failure(records, "Persistent error")
+
+        sink.write_batch = always_fail  # type: ignore[method-assign]
+
+        worker = Worker(
+            queue=queue,
+            sink=sink,
+            batch_size=5,
+            flush_interval=0.1,
+            max_retries=3,
+            retry_base_delay=0.05,  # Fast retries for testing
+        )
+        worker.start()
+
+        # Add records
+        for i in range(5):
+            queue.put({"index": i})
+
+        # Wait for all retry attempts (0.05 + 0.1 + 0.2 = 0.35s plus processing)
+        time.sleep(1.0)
+
+        worker.stop()
+
+        # Should have attempted max_retries times (initial + 2 retries = 3)
+        assert attempt_count == 3
+        # No records should be written since all attempts failed
+        assert sink.total_records == 0
+
+    def test_worker_continues_processing_during_retry_delay(self):
+        """Test that worker continues consuming new records during retry delays."""
+        queue = InMemoryQueue()
+        sink = MockSink()
+        first_batch_failed = False
+        batches_received: list[list[dict[str, Any]]] = []
+
+        def selective_fail(records: list[dict[str, Any]]) -> WriteResult:
+            nonlocal first_batch_failed
+            batches_received.append(list(records))
+
+            # Fail the first batch once
+            if not first_batch_failed and any(r.get("batch") == 1 for r in records):
+                first_batch_failed = True
+                return WriteResult.failure(records, "Temporary error")
+
+            sink.batches.append(records)
+            return WriteResult.ok()
+
+        sink.write_batch = selective_fail  # type: ignore[method-assign]
+
+        worker = Worker(
+            queue=queue,
+            sink=sink,
+            batch_size=5,
+            flush_interval=0.1,
+            retry_base_delay=0.2,  # Longer delay to ensure second batch processes first
+        )
+        worker.start()
+
+        # Add first batch
+        for i in range(5):
+            queue.put({"batch": 1, "index": i})
+
+        time.sleep(0.15)  # Wait for first batch to be attempted
+
+        # Add second batch while first is waiting for retry
+        for i in range(5):
+            queue.put({"batch": 2, "index": i})
+
+        # Wait for processing
+        time.sleep(0.5)
+
+        worker.stop()
+
+        # Both batches should eventually be written
+        assert sink.total_records == 10
+
+    def test_pending_retries_property(self):
+        """Test that pending_retries property tracks retry queue."""
+        queue = InMemoryQueue()
+        sink = MockSink()
+
+        def always_fail(records: list[dict[str, Any]]) -> WriteResult:
+            return WriteResult.failure(records, "Error")
+
+        sink.write_batch = always_fail  # type: ignore[method-assign]
+
+        worker = Worker(
+            queue=queue,
+            sink=sink,
+            batch_size=5,
+            flush_interval=0.1,
+            max_retries=5,
+            retry_base_delay=10.0,  # Long delay so retries stay pending
+        )
+        worker.start()
+
+        assert worker.pending_retries == 0
+
+        # Add records
+        for i in range(5):
+            queue.put({"index": i})
+
+        # Wait for first attempt to fail
+        time.sleep(0.3)
+
+        # Should have pending retry
+        assert worker.pending_retries >= 1
+
         worker.stop()

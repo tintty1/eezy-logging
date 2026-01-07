@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-from eezy_logging.sinks.base import Sink
+from eezy_logging.sinks.base import Sink, WriteResult
 
 if TYPE_CHECKING:
     from elasticsearch import Elasticsearch
@@ -218,8 +217,10 @@ class ElasticsearchSink(Sink):
         setup_ilm_policy: Whether to create an ILM policy on setup. Defaults to True.
         ilm_policy_name: Name of the ILM policy. Defaults to "{index_prefix}-policy".
         ilm_policy: Custom ILM policy configuration. Defaults to ILMPolicy().
-        max_retries: Maximum number of retry attempts for failed writes. Defaults to 3.
-        retry_delay: Initial delay between retries in seconds. Defaults to 1.0.
+
+    Note:
+        Retry logic is handled by the Worker, not the sink. Configure retries
+        via the Worker's max_retries and retry_base_delay parameters.
 
     Environment Variables (used when client is not provided):
         EEZY_ES_HOSTS: Comma-separated list of hosts (default: http://localhost:9200)
@@ -263,8 +264,9 @@ class ElasticsearchSink(Sink):
         setup_ilm_policy: bool = True,
         ilm_policy_name: str | None = None,
         ilm_policy: ILMPolicy | None = None,
-        max_retries: int = 3,
-        retry_delay: float = 1.0,
+        # Deprecated: retry logic is now handled by Worker
+        max_retries: int = 3,  # noqa: ARG002
+        retry_delay: float = 1.0,  # noqa: ARG002
     ) -> None:
         self._client = client
         self._owns_client = client is None
@@ -274,8 +276,6 @@ class ElasticsearchSink(Sink):
         self._setup_ilm_policy = setup_ilm_policy
         self._ilm_policy_name = ilm_policy_name or f"{index_prefix}-policy"
         self._ilm_policy = ilm_policy or DEFAULT_ILM_POLICY
-        self._max_retries = max_retries
-        self._retry_delay = retry_delay
 
     def _get_client(self) -> Elasticsearch:
         """Get or create the Elasticsearch client."""
@@ -361,10 +361,15 @@ class ElasticsearchSink(Sink):
             return f"{self._index_prefix}-{date_suffix}"
         return self._index_prefix
 
-    def write_batch(self, records: list[dict[str, Any]]) -> None:
-        """Write a batch of records to Elasticsearch using bulk API."""
+    def write_batch(self, records: list[dict[str, Any]]) -> WriteResult:
+        """Write a batch of records to Elasticsearch using bulk API.
+
+        This method makes a single write attempt and returns immediately.
+        Failed records are returned in the WriteResult for the worker to
+        schedule retries without blocking.
+        """
         if not records:
-            return
+            return WriteResult.ok()
 
         client = self._get_client()
         index_name = self._get_index_name()
@@ -378,37 +383,30 @@ class ElasticsearchSink(Sink):
             bulk_body.append({"index": {"_index": index_name}})
             bulk_body.append(record)
 
-        # Retry with exponential backoff
-        last_error: Exception | None = None
-        for attempt in range(self._max_retries):
-            try:
-                response = client.bulk(body=bulk_body, refresh=False)
-                if response.get("errors"):
-                    for item in response.get("items", []):
-                        if "error" in item.get("index", {}):
-                            _logger.warning(
-                                "eezy-logging: Bulk index error: %s",
-                                item["index"]["error"],
-                            )
-                return
-            except Exception as e:
-                last_error = e
-                if attempt < self._max_retries - 1:
-                    delay = self._retry_delay * (2**attempt)
-                    _logger.warning(
-                        "eezy-logging: Bulk write failed, retrying in %.1fs: %s",
-                        delay,
-                        e,
-                    )
-                    time.sleep(delay)
+        try:
+            response = client.bulk(body=bulk_body, refresh=False)
+            if response.get("errors"):
+                # Collect failed records for retry
+                failed_records: list[dict[str, Any]] = []
+                errors: list[str] = []
 
-        if last_error:
-            _logger.error(
-                "eezy-logging: Failed to write %d records after %d attempts: %s",
-                len(records),
-                self._max_retries,
-                last_error,
-            )
+                items = response.get("items", [])
+                for i, item in enumerate(items):
+                    index_result = item.get("index", {})
+                    if "error" in index_result:
+                        # Get the original record (every other item in bulk_body)
+                        if i < len(records):
+                            failed_records.append(records[i])
+                        errors.append(str(index_result["error"]))
+
+                if failed_records:
+                    return WriteResult(failed_records=failed_records, errors=errors)
+
+            return WriteResult.ok()
+
+        except Exception as e:
+            # Return all records as failed for retry
+            return WriteResult.failure(records, str(e))
 
     def close(self) -> None:
         """Close the Elasticsearch client if we own it."""

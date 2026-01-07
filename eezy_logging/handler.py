@@ -32,6 +32,8 @@ class EezyHandler(logging.Handler):
         flush_interval: Maximum seconds to wait before flushing a partial
             batch. Defaults to 5.0.
         level: Minimum log level to handle. Defaults to NOTSET (all levels).
+        max_retries: Maximum retry attempts for failed writes. Defaults to 3.
+        retry_base_delay: Base delay for exponential backoff. Defaults to 1.0.
 
     Note:
         When using InMemoryQueue, records in the queue are lost if the
@@ -65,6 +67,8 @@ class EezyHandler(logging.Handler):
         batch_size: int = 100,
         flush_interval: float = 5.0,
         level: int = logging.NOTSET,
+        max_retries: int = 3,
+        retry_base_delay: float = 1.0,
     ) -> None:
         super().__init__(level=level)
 
@@ -78,6 +82,8 @@ class EezyHandler(logging.Handler):
             sink=self._sink,
             batch_size=batch_size,
             flush_interval=flush_interval,
+            max_retries=max_retries,
+            retry_base_delay=retry_base_delay,
         )
         self._worker.start()
 

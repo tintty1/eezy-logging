@@ -6,7 +6,7 @@ from typing import Any
 
 from eezy_logging.handler import EezyHandler
 from eezy_logging.queues.memory import InMemoryQueue
-from eezy_logging.sinks.base import Sink
+from eezy_logging.sinks.base import Sink, WriteResult
 
 
 class MockSink(Sink):
@@ -20,8 +20,9 @@ class MockSink(Sink):
     def setup(self) -> None:
         self.setup_called = True
 
-    def write_batch(self, records: list[dict[str, Any]]) -> None:
+    def write_batch(self, records: list[dict[str, Any]]) -> WriteResult:
         self.batches.append(records)
+        return WriteResult.ok()
 
     def close(self) -> None:
         self.close_called = True

@@ -70,8 +70,12 @@ handler = EezyHandler(
     batch_size=100,         # Max records per batch
     flush_interval=5.0,     # Max seconds before flushing partial batch
     level=logging.NOTSET,   # Minimum log level
+    max_retries=3,          # Max retry attempts for failed writes
+    retry_base_delay=1.0,   # Base delay for exponential backoff (seconds)
 )
 ```
+
+> **Note**: Retries use exponential backoff (1s, 2s, 4s, ...) and are non-blocking - the worker continues consuming new logs while waiting to retry failed batches.
 
 ### Queue Backends
 
@@ -225,7 +229,7 @@ sink = OpenSearchSink(client=client, index_prefix="myapp-logs")
 Implement the `Sink` interface to send logs anywhere:
 
 ```python
-from eezy_logging.sinks import Sink
+from eezy_logging.sinks import Sink, WriteResult
 
 class SlackSink(Sink):
     def __init__(self, webhook_url: str, min_level: int = logging.ERROR):
@@ -236,18 +240,27 @@ class SlackSink(Sink):
         # Optional: called once before first write
         pass
 
-    def write_batch(self, records: list[dict]) -> None:
+    def write_batch(self, records: list[dict]) -> WriteResult:
         import requests
+        failed = []
         for record in records:
             if record.get("levelno", 0) >= self.min_level:
-                requests.post(self.webhook_url, json={
-                    "text": f"[{record['level']}] {record['message']}"
-                })
+                try:
+                    requests.post(self.webhook_url, json={
+                        "text": f"[{record['level']}] {record['message']}"
+                    })
+                except Exception:
+                    failed.append(record)
+        if failed:
+            return WriteResult.failure(failed, "Failed to post to Slack")
+        return WriteResult.ok()
 
     def close(self) -> None:
         # Optional: cleanup resources
         pass
 ```
+
+> **Note**: `write_batch` should return `WriteResult.ok()` on success or `WriteResult.failure(records, error)` for records that should be retried. The worker handles retry scheduling with exponential backoff - sinks should NOT block on retries.
 
 ### Custom Queue
 
@@ -303,6 +316,7 @@ class MyQueue(Queue):
 │                    Worker Thread                                 │
 │   - Consumes batches from queue                                  │
 │   - Respects batch_size and flush_interval                       │
+│   - Non-blocking retry scheduling with exponential backoff       │
 │   - Drains queue on shutdown                                     │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │
