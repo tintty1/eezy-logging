@@ -263,7 +263,7 @@ class TestRedisQueueIntegration:
 
         from eezy_logging import EezyHandler
         from eezy_logging.queues.redis import RedisQueue
-        from eezy_logging.sinks.base import Sink
+        from eezy_logging.sinks.base import Sink, WriteResult
 
         # Create a mock sink to capture records
         captured_records: list[dict] = []
@@ -272,8 +272,9 @@ class TestRedisQueueIntegration:
             def setup(self) -> None:
                 pass
 
-            def write_batch(self, records: list[dict]) -> None:
+            def write_batch(self, records: list[dict]) -> WriteResult:
                 captured_records.extend(records)
+                return WriteResult.ok()
 
             def close(self) -> None:
                 pass
@@ -311,7 +312,7 @@ class TestRedisQueueIntegration:
 
         from eezy_logging import EezyHandler
         from eezy_logging.queues.redis import RedisQueue
-        from eezy_logging.sinks.base import Sink
+        from eezy_logging.sinks.base import Sink, WriteResult
 
         captured_records: list[dict] = []
 
@@ -324,9 +325,10 @@ class TestRedisQueueIntegration:
             def setup(self) -> None:
                 pass
 
-            def write_batch(self, records: list[dict]) -> None:
+            def write_batch(self, records: list[dict]) -> WriteResult:
                 if self.should_process:
                     captured_records.extend(records)
+                return WriteResult.ok()
 
             def close(self) -> None:
                 pass
