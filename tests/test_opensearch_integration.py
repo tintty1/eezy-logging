@@ -392,9 +392,10 @@ class TestCustomIndexSettings:
             # Wait for index to be created
             wait_for_docs(os_client, f"{unique_index_prefix}-*", 1)
 
-            # Check index settings
-            index_name = f"{unique_index_prefix}-000001"
-            settings = os_client.indices.get_settings(index=index_name)
+            # Check index settings (use wildcard to get actual index name)
+            settings = os_client.indices.get_settings(index=f"{unique_index_prefix}-*")
+            # Get the first (and only) index name
+            index_name = next(iter(settings.keys()))
             index_settings = settings[index_name]["settings"]["index"]
 
             assert index_settings["number_of_shards"] == "2"
@@ -442,9 +443,10 @@ class TestCustomIndexSettings:
             # Wait for index to be created
             wait_for_docs(os_client, f"{unique_index_prefix}-*", 1)
 
-            # Check index mappings
-            index_name = f"{unique_index_prefix}-000001"
-            mappings = os_client.indices.get_mapping(index=index_name)
+            # Check index mappings (use wildcard to get actual index name)
+            mappings = os_client.indices.get_mapping(index=f"{unique_index_prefix}-*")
+            # Get the first (and only) index name
+            index_name = next(iter(mappings.keys()))
             properties = mappings[index_name]["mappings"]["properties"]
 
             # Verify custom fields are mapped correctly
