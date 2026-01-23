@@ -159,6 +159,16 @@ sink = ElasticsearchSink(
     ilm_policy=policy,
 )
 
+# Custom index settings
+sink = ElasticsearchSink(
+    index_prefix="myapp-logs",
+    custom_index_settings={
+        "refresh_interval": "30s",
+        "number_of_shards": 3,
+        "number_of_replicas": 2,
+    }
+)
+
 # Using custom client
 from elasticsearch import Elasticsearch
 client = Elasticsearch(
@@ -207,6 +217,16 @@ policy = ISMPolicy(
 sink = OpenSearchSink(
     index_prefix="myapp-logs",
     ism_policy=policy,
+)
+
+# Custom index settings
+sink = OpenSearchSink(
+    index_prefix="myapp-logs",
+    custom_index_settings={
+        "refresh_interval": "30s",
+        "number_of_shards": 3,
+        "number_of_replicas": 2,
+    }
 )
 
 # Using custom client

@@ -217,6 +217,9 @@ class ElasticsearchSink(Sink):
         setup_ilm_policy: Whether to create an ILM policy on setup. Defaults to True.
         ilm_policy_name: Name of the ILM policy. Defaults to "{index_prefix}-policy".
         ilm_policy: Custom ILM policy configuration. Defaults to ILMPolicy().
+        custom_index_settings: Custom index settings to merge with defaults.
+            These will override default settings like number_of_shards and
+            number_of_replicas. Example: {"refresh_interval": "30s"}
 
     Note:
         Retry logic is handled by the Worker, not the sink. Configure retries
@@ -264,6 +267,7 @@ class ElasticsearchSink(Sink):
         setup_ilm_policy: bool = True,
         ilm_policy_name: str | None = None,
         ilm_policy: ILMPolicy | None = None,
+        custom_index_settings: dict[str, Any] | None = None,
         # Deprecated: retry logic is now handled by Worker
         max_retries: int = 3,  # noqa: ARG002
         retry_delay: float = 1.0,  # noqa: ARG002
@@ -276,6 +280,7 @@ class ElasticsearchSink(Sink):
         self._setup_ilm_policy = setup_ilm_policy
         self._ilm_policy_name = ilm_policy_name or f"{index_prefix}-policy"
         self._ilm_policy = ilm_policy or DEFAULT_ILM_POLICY
+        self._custom_index_settings = custom_index_settings or {}
 
     def _get_client(self) -> Elasticsearch:
         """Get or create the Elasticsearch client."""
@@ -323,6 +328,9 @@ class ElasticsearchSink(Sink):
 
         if self._setup_ilm_policy:
             settings["index.lifecycle.name"] = self._ilm_policy_name
+
+        # Merge custom settings (will override defaults)
+        settings.update(self._custom_index_settings)
 
         es_major_version = _get_es_client_major_version()
 

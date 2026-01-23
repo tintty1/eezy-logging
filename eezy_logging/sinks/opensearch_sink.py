@@ -173,6 +173,9 @@ class OpenSearchSink(Sink):
         setup_ism_policy: Whether to create an ISM policy on setup. Defaults to True.
         ism_policy_name: Name of the ISM policy. Defaults to "{index_prefix}-policy".
         ism_policy: Custom ISM policy configuration. Defaults to ISMPolicy().
+        custom_index_settings: Custom index settings to merge with defaults.
+            These will override default settings like number_of_shards and
+            number_of_replicas. Example: {"refresh_interval": "30s"}
 
     Note:
         Retry logic is handled by the Worker, not the sink. Configure retries
@@ -214,6 +217,7 @@ class OpenSearchSink(Sink):
         setup_ism_policy: bool = True,
         ism_policy_name: str | None = None,
         ism_policy: ISMPolicy | None = None,
+        custom_index_settings: dict[str, Any] | None = None,
         # Deprecated: retry logic is now handled by Worker
         max_retries: int = 3,  # noqa: ARG002
         retry_delay: float = 1.0,  # noqa: ARG002
@@ -226,6 +230,7 @@ class OpenSearchSink(Sink):
         self._setup_ism_policy = setup_ism_policy
         self._ism_policy_name = ism_policy_name or f"{index_prefix}-policy"
         self._ism_policy = ism_policy or DEFAULT_ISM_POLICY
+        self._custom_index_settings = custom_index_settings or {}
 
     def _get_client(self) -> OpenSearch:
         """Get or create the OpenSearch client."""
@@ -269,6 +274,9 @@ class OpenSearchSink(Sink):
 
         if self._setup_ism_policy:
             settings["plugins.index_state_management.rollover_alias"] = self._index_prefix
+
+        # Merge custom settings (will override defaults)
+        settings.update(self._custom_index_settings)
 
         try:
             # OpenSearch uses legacy template API
