@@ -101,3 +101,41 @@ class Sink(ABC):
 
         The default implementation does nothing.
         """
+
+
+# Standard log record mappings shared between sinks
+# This matches the structure produced by the default serialize_record function
+DEFAULT_LOG_MAPPINGS: dict[str, Any] = {
+    "properties": {
+        "@timestamp": {"type": "date"},
+        "message": {"type": "text"},
+        "level": {"type": "keyword"},
+        "logger": {"type": "keyword"},
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "hostname": {"type": "keyword"},
+                "levelno": {"type": "integer"},
+                "pathname": {"type": "keyword"},
+                "filename": {"type": "keyword"},
+                "module": {"type": "keyword"},
+                "funcName": {"type": "keyword"},
+                "lineno": {"type": "integer"},
+                "process": {"type": "integer"},
+                "processName": {"type": "keyword"},
+                "thread": {"type": "long"},
+                "threadName": {"type": "keyword"},
+            },
+        },
+        "exc_info": {"type": "text"},
+        "stack_info": {"type": "text"},
+    },
+    "dynamic_templates": [
+        {
+            "strings_as_keywords": {
+                "match_mapping_type": "string",
+                "mapping": {"type": "keyword", "ignore_above": 1024},
+            }
+        }
+    ],
+}

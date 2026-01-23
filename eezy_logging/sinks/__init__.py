@@ -1,6 +1,6 @@
 """Sink implementations for eezy-logging."""
 
-from eezy_logging.sinks.base import Sink, WriteResult
+from eezy_logging.sinks.base import DEFAULT_LOG_MAPPINGS, Sink, WriteResult
 from eezy_logging.sinks.elasticsearch_sink import ElasticsearchSink, ILMPolicy
 from eezy_logging.sinks.opensearch_sink import ISMPolicy, OpenSearchSink
 
@@ -11,4 +11,5 @@ __all__ = [
     "ILMPolicy",
     "OpenSearchSink",
     "ISMPolicy",
+    "DEFAULT_LOG_MAPPINGS",
 ]

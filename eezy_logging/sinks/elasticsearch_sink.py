@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-from eezy_logging.sinks.base import Sink, WriteResult
+from eezy_logging.sinks.base import DEFAULT_LOG_MAPPINGS, Sink, WriteResult
 
 if TYPE_CHECKING:
     from elasticsearch import Elasticsearch
@@ -163,43 +163,6 @@ def _create_es_client() -> Elasticsearch:
     return Elasticsearch(hosts=hosts, verify_certs=verify_certs)
 
 
-# Standard log record mappings shared between sinks
-LOG_MAPPINGS: dict[str, Any] = {
-    "properties": {
-        "@timestamp": {"type": "date"},
-        "message": {"type": "text"},
-        "level": {"type": "keyword"},
-        "logger": {"type": "keyword"},
-        "metadata": {
-            "type": "object",
-            "properties": {
-                "hostname": {"type": "keyword"},
-                "levelno": {"type": "integer"},
-                "pathname": {"type": "keyword"},
-                "filename": {"type": "keyword"},
-                "module": {"type": "keyword"},
-                "funcName": {"type": "keyword"},
-                "lineno": {"type": "integer"},
-                "process": {"type": "integer"},
-                "processName": {"type": "keyword"},
-                "thread": {"type": "long"},
-                "threadName": {"type": "keyword"},
-            },
-        },
-        "exc_info": {"type": "text"},
-        "stack_info": {"type": "text"},
-    },
-    "dynamic_templates": [
-        {
-            "strings_as_keywords": {
-                "match_mapping_type": "string",
-                "mapping": {"type": "keyword", "ignore_above": 1024},
-            }
-        }
-    ],
-}
-
-
 class ElasticsearchSink(Sink):
     """Elasticsearch sink with ILM and index template support.
 
@@ -220,6 +183,10 @@ class ElasticsearchSink(Sink):
         custom_index_settings: Custom index settings to merge with defaults.
             These will override default settings like number_of_shards and
             number_of_replicas. Example: {"refresh_interval": "30s"}
+        custom_mappings: Custom field mappings to replace the defaults.
+            If provided, completely replaces DEFAULT_LOG_MAPPINGS.
+            Use with a custom serializer to ensure your log records match.
+            See eezy_logging.sinks.base.DEFAULT_LOG_MAPPINGS for the default.
 
     Note:
         Retry logic is handled by the Worker, not the sink. Configure retries
@@ -268,6 +235,7 @@ class ElasticsearchSink(Sink):
         ilm_policy_name: str | None = None,
         ilm_policy: ILMPolicy | None = None,
         custom_index_settings: dict[str, Any] | None = None,
+        custom_mappings: dict[str, Any] | None = None,
         # Deprecated: retry logic is now handled by Worker
         max_retries: int = 3,  # noqa: ARG002
         retry_delay: float = 1.0,  # noqa: ARG002
@@ -281,6 +249,7 @@ class ElasticsearchSink(Sink):
         self._ilm_policy_name = ilm_policy_name or f"{index_prefix}-policy"
         self._ilm_policy = ilm_policy or DEFAULT_ILM_POLICY
         self._custom_index_settings = custom_index_settings or {}
+        self._custom_mappings = custom_mappings or {}
 
     def _get_client(self) -> Elasticsearch:
         """Get or create the Elasticsearch client."""
@@ -332,6 +301,9 @@ class ElasticsearchSink(Sink):
         # Merge custom settings (will override defaults)
         settings.update(self._custom_index_settings)
 
+        # Use custom mappings if provided, otherwise use defaults
+        mappings = self._custom_mappings if self._custom_mappings else DEFAULT_LOG_MAPPINGS
+
         es_major_version = _get_es_client_major_version()
 
         if es_major_version >= 8:
@@ -341,7 +313,7 @@ class ElasticsearchSink(Sink):
                     "index_patterns": [f"{self._index_prefix}-*"],
                     "template": {
                         "settings": settings,
-                        "mappings": LOG_MAPPINGS,
+                        "mappings": mappings,
                     },
                     "priority": 100,
                 }
@@ -355,7 +327,7 @@ class ElasticsearchSink(Sink):
                 legacy_body: dict[str, Any] = {
                     "index_patterns": [f"{self._index_prefix}-*"],
                     "settings": settings,
-                    "mappings": LOG_MAPPINGS,
+                    "mappings": mappings,
                 }
                 client.indices.put_template(name=template_name, body=legacy_body)
                 _logger.debug("eezy-logging: Created legacy index template '%s'", template_name)

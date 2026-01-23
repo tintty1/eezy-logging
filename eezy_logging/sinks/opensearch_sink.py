@@ -8,8 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from eezy_logging.sinks.base import Sink, WriteResult
-from eezy_logging.sinks.elasticsearch_sink import LOG_MAPPINGS
+from eezy_logging.sinks.base import DEFAULT_LOG_MAPPINGS, Sink, WriteResult
 
 if TYPE_CHECKING:
     from opensearchpy import OpenSearch
@@ -176,6 +175,10 @@ class OpenSearchSink(Sink):
         custom_index_settings: Custom index settings to merge with defaults.
             These will override default settings like number_of_shards and
             number_of_replicas. Example: {"refresh_interval": "30s"}
+        custom_mappings: Custom field mappings to replace the defaults.
+            If provided, completely replaces DEFAULT_LOG_MAPPINGS.
+            Use with a custom serializer to ensure your log records match.
+            See eezy_logging.sinks.base.DEFAULT_LOG_MAPPINGS for the default.
 
     Note:
         Retry logic is handled by the Worker, not the sink. Configure retries
@@ -218,6 +221,7 @@ class OpenSearchSink(Sink):
         ism_policy_name: str | None = None,
         ism_policy: ISMPolicy | None = None,
         custom_index_settings: dict[str, Any] | None = None,
+        custom_mappings: dict[str, Any] | None = None,
         # Deprecated: retry logic is now handled by Worker
         max_retries: int = 3,  # noqa: ARG002
         retry_delay: float = 1.0,  # noqa: ARG002
@@ -231,6 +235,7 @@ class OpenSearchSink(Sink):
         self._ism_policy_name = ism_policy_name or f"{index_prefix}-policy"
         self._ism_policy = ism_policy or DEFAULT_ISM_POLICY
         self._custom_index_settings = custom_index_settings or {}
+        self._custom_mappings = custom_mappings or {}
 
     def _get_client(self) -> OpenSearch:
         """Get or create the OpenSearch client."""
@@ -278,6 +283,9 @@ class OpenSearchSink(Sink):
         # Merge custom settings (will override defaults)
         settings.update(self._custom_index_settings)
 
+        # Use custom mappings if provided, otherwise use defaults
+        mappings = self._custom_mappings if self._custom_mappings else DEFAULT_LOG_MAPPINGS
+
         try:
             # OpenSearch uses legacy template API
             client.indices.put_template(
@@ -285,7 +293,7 @@ class OpenSearchSink(Sink):
                 body={
                     "index_patterns": [f"{self._index_prefix}-*"],
                     "settings": settings,
-                    "mappings": LOG_MAPPINGS,
+                    "mappings": mappings,
                 },
             )
             _logger.debug("eezy-logging: Created index template '%s'", template_name)

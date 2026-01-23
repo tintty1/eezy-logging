@@ -72,10 +72,52 @@ handler = EezyHandler(
     level=logging.NOTSET,   # Minimum log level
     max_retries=3,          # Max retry attempts for failed writes
     retry_base_delay=1.0,   # Base delay for exponential backoff (seconds)
+    serializer=None,        # Custom serializer function (default: serialize_record)
 )
 ```
 
 > **Note**: Retries use exponential backoff (1s, 2s, 4s, ...) and are non-blocking - the worker continues consuming new logs while waiting to retry failed batches.
+
+#### Custom Serializer
+
+You can provide a custom serializer function to control how log records are converted to dictionaries:
+
+```python
+import logging
+from typing import Any
+from eezy_logging import EezyHandler
+from eezy_logging.serializer import serialize_record
+
+def my_serializer(record: logging.LogRecord) -> dict[str, Any]:
+    # Start with default serialization
+    data = serialize_record(record)
+
+    # Add custom fields
+    data["environment"] = "production"
+    data["service"] = "my-api"
+
+    # Transform existing fields
+    if "user_id" in data:
+        data["user_id"] = str(data["user_id"])
+
+    return data
+
+handler = EezyHandler(sink=sink, serializer=my_serializer)
+```
+
+Or create a completely custom serializer:
+
+```python
+def minimal_serializer(record: logging.LogRecord) -> dict[str, Any]:
+    return {
+        "timestamp": record.created,
+        "level": record.levelname,
+        "message": record.getMessage(),
+        "logger": record.name,
+    }
+
+handler = EezyHandler(sink=sink, serializer=minimal_serializer)
+```
 
 ### Queue Backends
 
@@ -122,6 +164,7 @@ handler = EezyHandler(sink=sink, queue=queue)
 ```
 
 **Environment variables** (used when client is not provided):
+
 - `EEZY_REDIS_HOST` (default: `localhost`)
 - `EEZY_REDIS_PORT` (default: `6379`)
 - `EEZY_REDIS_PASSWORD` (default: none)
@@ -169,6 +212,20 @@ sink = ElasticsearchSink(
     }
 )
 
+# Custom field mappings (replaces defaults - use with custom serializer)
+sink = ElasticsearchSink(
+    index_prefix="myapp-logs",
+    custom_mappings={
+        "properties": {
+            "@timestamp": {"type": "date"},
+            "message": {"type": "text"},
+            "level": {"type": "keyword"},
+            "user_id": {"type": "keyword"},
+            "request_duration_ms": {"type": "float"},
+        }
+    }
+)
+
 # Using custom client
 from elasticsearch import Elasticsearch
 client = Elasticsearch(
@@ -179,6 +236,7 @@ sink = ElasticsearchSink(client=client, index_prefix="myapp-logs")
 ```
 
 **Environment variables** (used when client is not provided):
+
 - `EEZY_ES_HOSTS` (comma-separated, default: `http://localhost:9200`)
 - `EEZY_ES_USERNAME`
 - `EEZY_ES_PASSWORD`
@@ -229,6 +287,20 @@ sink = OpenSearchSink(
     }
 )
 
+# Custom field mappings (replaces defaults - use with custom serializer)
+sink = OpenSearchSink(
+    index_prefix="myapp-logs",
+    custom_mappings={
+        "properties": {
+            "@timestamp": {"type": "date"},
+            "message": {"type": "text"},
+            "level": {"type": "keyword"},
+            "user_id": {"type": "keyword"},
+            "request_duration_ms": {"type": "float"},
+        }
+    }
+)
+
 # Using custom client
 from opensearchpy import OpenSearch
 client = OpenSearch(
@@ -239,6 +311,7 @@ sink = OpenSearchSink(client=client, index_prefix="myapp-logs")
 ```
 
 **Environment variables** (used when client is not provided):
+
 - `EEZY_OS_HOSTS` (comma-separated, default: `http://localhost:9200`)
 - `EEZY_OS_USERNAME`
 - `EEZY_OS_PASSWORD`

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 from eezy_logging.queues.memory import InMemoryQueue
 from eezy_logging.serializer import serialize_record
@@ -34,6 +34,9 @@ class EezyHandler(logging.Handler):
         level: Minimum log level to handle. Defaults to NOTSET (all levels).
         max_retries: Maximum retry attempts for failed writes. Defaults to 3.
         retry_base_delay: Base delay for exponential backoff. Defaults to 1.0.
+        serializer: Custom function to serialize LogRecord to dict. If not
+            provided, uses the default serialize_record function. The function
+            should accept a logging.LogRecord and return a dict[str, Any].
 
     Note:
         When using InMemoryQueue, records in the queue are lost if the
@@ -69,6 +72,7 @@ class EezyHandler(logging.Handler):
         level: int = logging.NOTSET,
         max_retries: int = 3,
         retry_base_delay: float = 1.0,
+        serializer: Callable[[logging.LogRecord], dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(level=level)
 
@@ -76,6 +80,7 @@ class EezyHandler(logging.Handler):
         self._queue = queue or InMemoryQueue()
         self._batch_size = batch_size
         self._flush_interval = flush_interval
+        self._serializer = serializer or serialize_record
 
         self._worker = Worker(
             queue=self._queue,
@@ -97,7 +102,7 @@ class EezyHandler(logging.Handler):
             record: The log record to handle.
         """
         try:
-            data = serialize_record(record)
+            data = self._serializer(record)
             self._queue.put(data)
         except Exception:
             self.handleError(record)

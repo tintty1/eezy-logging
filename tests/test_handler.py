@@ -260,3 +260,99 @@ class TestEezyHandlerIntegration:
         finally:
             handler.close()
             logger.removeHandler(handler)
+
+
+class TestCustomSerializer:
+    """Tests for custom serializer functionality."""
+
+    def test_custom_serializer_is_used(self):
+        """Test that custom serializer is called for each record."""
+        sink = MockSink()
+
+        def custom_serializer(record: logging.LogRecord) -> dict[str, Any]:
+            return {
+                "custom_message": record.getMessage(),
+                "custom_level": record.levelname,
+                "custom_field": "test_value",
+            }
+
+        handler = EezyHandler(
+            sink=sink, batch_size=10, flush_interval=0.1, serializer=custom_serializer
+        )
+
+        logger = logging.getLogger("test.custom_serializer")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        try:
+            logger.info("Test message")
+            time.sleep(0.3)
+
+            assert sink.total_records == 1
+            record = sink.all_records[0]
+            assert record["custom_message"] == "Test message"
+            assert record["custom_level"] == "INFO"
+            assert record["custom_field"] == "test_value"
+            # Default fields should NOT be present
+            assert "message" not in record
+            assert "level" not in record
+        finally:
+            handler.close()
+            logger.removeHandler(handler)
+
+    def test_custom_serializer_with_extra_fields(self):
+        """Test custom serializer can access extra fields."""
+        sink = MockSink()
+
+        def custom_serializer(record: logging.LogRecord) -> dict[str, Any]:
+            data = {
+                "msg": record.getMessage(),
+                "level": record.levelname,
+            }
+            # Access extra fields from record
+            user_id = getattr(record, "user_id", None)
+            if user_id is not None:
+                data["uid"] = user_id
+            return data
+
+        handler = EezyHandler(
+            sink=sink, batch_size=10, flush_interval=0.1, serializer=custom_serializer
+        )
+
+        logger = logging.getLogger("test.custom_serializer_extra")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        try:
+            logger.info("User action", extra={"user_id": 42})
+            time.sleep(0.3)
+
+            record = sink.all_records[0]
+            assert record["msg"] == "User action"
+            assert record["uid"] == 42
+        finally:
+            handler.close()
+            logger.removeHandler(handler)
+
+    def test_default_serializer_when_none_provided(self):
+        """Test that default serializer is used when none is provided."""
+        sink = MockSink()
+        handler = EezyHandler(sink=sink, batch_size=10, flush_interval=0.1)
+
+        logger = logging.getLogger("test.default_serializer")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+
+        try:
+            logger.info("Test message")
+            time.sleep(0.3)
+
+            record = sink.all_records[0]
+            # Default serializer should produce these fields
+            assert record["message"] == "Test message"
+            assert record["level"] == "INFO"
+            assert "@timestamp" in record
+            assert "metadata" in record
+        finally:
+            handler.close()
+            logger.removeHandler(handler)

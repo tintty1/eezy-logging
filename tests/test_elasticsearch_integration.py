@@ -532,6 +532,108 @@ class TestElasticsearchRollover:
             cleanup_alias(es_client, alias_name)
 
 
+class TestCustomIndexSettings:
+    """Tests for custom index settings and mappings."""
+
+    def test_custom_index_settings(self, es_client: Elasticsearch, unique_index_prefix: str):
+        """Test that custom index settings are applied."""
+        sink = ElasticsearchSink(
+            client=es_client,
+            index_prefix=unique_index_prefix,
+            setup_ilm_policy=False,
+            custom_index_settings={
+                "number_of_shards": 2,
+                "number_of_replicas": 0,
+                "refresh_interval": "5s",
+            },
+        )
+
+        try:
+            sink.setup()
+
+            # Write a record to create the index
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": "Test message",
+                        "level": "INFO",
+                        "logger": "test",
+                    }
+                ]
+            )
+
+            # Wait for index to be created
+            wait_for_docs(es_client, f"{unique_index_prefix}-*", 1)
+
+            # Check index settings
+            index_name = f"{unique_index_prefix}-000001"
+            settings = es_client.indices.get_settings(index=index_name)
+            index_settings = settings[index_name]["settings"]["index"]
+
+            assert index_settings["number_of_shards"] == "2"
+            assert index_settings["number_of_replicas"] == "0"
+            assert index_settings["refresh_interval"] == "5s"
+        finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
+            cleanup_template(es_client, f"{unique_index_prefix}-template")
+
+    def test_custom_mappings(self, es_client: Elasticsearch, unique_index_prefix: str):
+        """Test that custom mappings completely replace default mappings."""
+        custom_mappings = {
+            "properties": {
+                "@timestamp": {"type": "date"},
+                "message": {"type": "text"},
+                "level": {"type": "keyword"},
+                "custom_field": {"type": "keyword"},
+                "numeric_field": {"type": "integer"},
+            }
+        }
+
+        sink = ElasticsearchSink(
+            client=es_client,
+            index_prefix=unique_index_prefix,
+            setup_ilm_policy=False,
+            custom_mappings=custom_mappings,
+        )
+
+        try:
+            sink.setup()
+
+            # Write a record with custom fields
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": "Test message",
+                        "level": "INFO",
+                        "custom_field": "custom_value",
+                        "numeric_field": 42,
+                    }
+                ]
+            )
+
+            # Wait for index to be created
+            wait_for_docs(es_client, f"{unique_index_prefix}-*", 1)
+
+            # Check index mappings
+            index_name = f"{unique_index_prefix}-000001"
+            mappings = es_client.indices.get_mapping(index=index_name)
+            properties = mappings[index_name]["mappings"]["properties"]
+
+            # Verify custom fields are mapped correctly
+            assert properties["custom_field"]["type"] == "keyword"
+            assert properties["numeric_field"]["type"] == "integer"
+
+            # Verify default fields like "logger" and "metadata" are NOT present
+            # (since custom_mappings replaces, not merges)
+            assert "logger" not in properties
+            assert "metadata" not in properties
+        finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
+            cleanup_template(es_client, f"{unique_index_prefix}-template")
+
+
 class TestCustomILMPolicy:
     """Tests for custom ILM policy configuration."""
 
