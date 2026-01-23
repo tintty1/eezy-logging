@@ -108,9 +108,9 @@ def serialize_record(record: logging.LogRecord) -> dict[str, Any]:
         if key not in standard_attrs and not key.startswith("_"):
             # Try to serialize the value
             try:
-                if isinstance(value, (str, int, float, bool, type(None))):
+                if isinstance(value, str | int | float | bool | type(None)):
                     data[key] = value
-                elif isinstance(value, (list, dict)):
+                elif isinstance(value, list | dict):
                     data[key] = value
                 else:
                     data[key] = str(value)
