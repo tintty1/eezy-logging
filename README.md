@@ -256,12 +256,9 @@ from eezy_logging.sinks import OpenSearchSink, ISMPolicy
 
 # Using environment variables or defaults
 sink = OpenSearchSink(
-    index_prefix="myapp-logs",      # Index name prefix
-    index_date_format="%Y.%m.%d",   # Date suffix format (None to disable)
+    index_prefix="myapp-logs",       # Index name prefix (also used as alias)
     setup_index_template=True,       # Create index template on setup
     setup_ism_policy=True,           # Create ISM policy on setup
-    max_retries=3,                   # Retry attempts for failed writes
-    retry_delay=1.0,                 # Initial retry delay (exponential backoff)
 )
 
 # Custom ISM policy - standard configuration

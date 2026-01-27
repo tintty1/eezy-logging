@@ -224,10 +224,11 @@ class OpenSearchSink(Sink):
         client: OpenSearch client instance. If not provided, a client will be
             created using environment variables or defaults.
         index_prefix: Prefix for index names. Defaults to "eezy-logs".
-        index_date_format: Date format for index suffix. Defaults to "%Y.%m.%d".
-            Set to None to disable date-based indices.
-        index_aliases: List of aliases to assign to indices. If not provided,
-            defaults to [index_prefix]. Set to empty list to disable aliases.
+            Also used as the primary alias for writing logs (required for rollover).
+            When using ISM rollover, indices will have numeric suffixes (-000001, -000002).
+        index_aliases: Additional aliases to assign to indices. The index_prefix
+            is always included as an alias (required for rollover). Specify additional
+            aliases here if needed. Example: ["logs", "app-logs"].
         setup_index_template: Whether to create an index template on setup.
             Defaults to True.
         setup_ism_policy: Whether to create an ISM policy on setup. Defaults to True.
@@ -256,6 +257,12 @@ class OpenSearchSink(Sink):
     Example:
         # Using environment variables or defaults
         sink = OpenSearchSink(index_prefix="myapp-logs")
+
+        # Additional aliases (index_prefix is always included)
+        sink = OpenSearchSink(
+            index_prefix="myapp-logs",
+            index_aliases=["logs", "production-logs"],  # myapp-logs also included
+        )
 
         # Custom ISM policy
         from eezy_logging.sinks import OpenSearchSink, ISMPolicy
@@ -302,7 +309,6 @@ class OpenSearchSink(Sink):
         self,
         client: OpenSearch | None = None,
         index_prefix: str = "eezy-logs",
-        index_date_format: str | None = "%Y.%m.%d",
         index_aliases: list[str] | None = None,
         setup_index_template: bool = True,
         setup_ism_policy: bool = True,
@@ -317,8 +323,17 @@ class OpenSearchSink(Sink):
         self._client = client
         self._owns_client = client is None
         self._index_prefix = index_prefix
-        self._index_date_format = index_date_format
-        self._index_aliases = index_aliases if index_aliases is not None else [index_prefix]
+
+        # Always include index_prefix in aliases for rollover support
+        # Additional aliases can be provided via index_aliases
+        if index_aliases is None:
+            self._index_aliases = [index_prefix]
+        else:
+            # Ensure index_prefix is always in the aliases list
+            self._index_aliases = list(index_aliases)
+            if index_prefix not in self._index_aliases:
+                self._index_aliases.insert(0, index_prefix)
+
         self._setup_index_template = setup_index_template
         self._setup_ism_policy = setup_ism_policy
         self._ism_policy_name = ism_policy_name or f"{index_prefix}-policy"
@@ -396,25 +411,21 @@ class OpenSearchSink(Sink):
         except Exception as e:
             _logger.warning("eezy-logging: Could not create index template: %s", e)
 
-    def _get_index_name(self) -> str:
-        """Generate the current index name based on date format."""
-        if self._index_date_format:
-            date_suffix = datetime.now(UTC).strftime(self._index_date_format)
-            return f"{self._index_prefix}-{date_suffix}"
-        return self._index_prefix
-
     def write_batch(self, records: list[dict[str, Any]]) -> WriteResult:
         """Write a batch of records to OpenSearch using bulk API.
 
         This method makes a single write attempt and returns immediately.
         Failed records are returned in the WriteResult for the worker to
         schedule retries without blocking.
+
+        Records are written to the index_prefix alias, which supports rollover.
         """
         if not records:
             return WriteResult.ok()
 
         client = self._get_client()
-        index_name = self._get_index_name()
+        # Write to the alias (index_prefix) for rollover support
+        index_name = self._index_prefix
 
         # Build bulk request body
         bulk_body: list[dict[str, Any]] = []

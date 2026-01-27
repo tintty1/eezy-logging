@@ -380,11 +380,13 @@ class TestIndexAliases:
             # Verify aliases section exists with index_prefix as alias
             assert "aliases" in template
             assert unique_index_prefix in template["aliases"]
+            # Should only have one alias (index_prefix)
+            assert len(template["aliases"]) == 1
         finally:
             cleanup_template(os_client, f"{unique_index_prefix}-template")
 
     def test_custom_aliases(self, os_client: OpenSearch, unique_index_prefix: str):
-        """Test that custom aliases are applied to index template."""
+        """Test that custom aliases are applied and index_prefix is always included."""
         custom_aliases = ["logs", "app-logs", "production"]
         sink = OpenSearchSink(
             client=os_client,
@@ -406,17 +408,21 @@ class TestIndexAliases:
             for alias in custom_aliases:
                 assert alias in template["aliases"]
 
-            # Verify index_prefix is NOT in aliases (since we provided custom ones)
-            assert unique_index_prefix not in template["aliases"]
+            # Verify index_prefix is ALSO included (always added for rollover support)
+            assert unique_index_prefix in template["aliases"]
+
+            # Should have 4 aliases total: index_prefix + 3 custom
+            assert len(template["aliases"]) == 4
         finally:
             cleanup_template(os_client, f"{unique_index_prefix}-template")
+            cleanup_alias(os_client, unique_index_prefix)
             for alias in custom_aliases:
                 cleanup_alias(os_client, alias)
 
-    def test_empty_aliases_list_disables_aliases(
+    def test_empty_aliases_list_still_includes_index_prefix(
         self, os_client: OpenSearch, unique_index_prefix: str
     ):
-        """Test that empty aliases list disables alias creation."""
+        """Test that even with empty aliases list, index_prefix is always included."""
         sink = OpenSearchSink(
             client=os_client,
             index_prefix=unique_index_prefix,
@@ -427,14 +433,15 @@ class TestIndexAliases:
         try:
             sink.setup()
 
-            # Check template does not include aliases section
+            # Check template includes index_prefix alias
             template_name = f"{unique_index_prefix}-template"
             response = os_client.indices.get_template(name=template_name)
             template = response[template_name]
 
-            # Aliases section should be absent or empty
-            aliases = template.get("aliases", {})
-            assert len(aliases) == 0
+            # index_prefix should always be present for rollover support
+            assert "aliases" in template
+            assert unique_index_prefix in template["aliases"]
+            assert len(template["aliases"]) == 1
         finally:
             cleanup_template(os_client, f"{unique_index_prefix}-template")
 
@@ -464,23 +471,31 @@ class TestIndexAliases:
                 ]
             )
 
-            # Wait for documents to be indexed
-            wait_for_docs(os_client, f"{unique_index_prefix}-*", 5)
+            # Wait for documents to be indexed (using index_prefix alias)
+            wait_for_docs(os_client, unique_index_prefix, 5)
 
-            # Query via alias name
+            # Query via custom alias name
             os_client.indices.refresh(index=alias_name)
             response = os_client.search(
                 index=alias_name,
                 body={"query": {"match_all": {}}, "size": 10},
             )
 
-            # Verify we can query via alias
+            # Verify we can query via custom alias
             assert response["hits"]["total"]["value"] == 5
             messages = {hit["_source"]["message"] for hit in response["hits"]["hits"]}
             assert messages == {f"Test message {i}" for i in range(5)}
+
+            # Also verify we can query via index_prefix alias
+            response2 = os_client.search(
+                index=unique_index_prefix,
+                body={"query": {"match_all": {}}, "size": 10},
+            )
+            assert response2["hits"]["total"]["value"] == 5
         finally:
             cleanup_indices(os_client, f"{unique_index_prefix}-*")
             cleanup_template(os_client, f"{unique_index_prefix}-template")
+            cleanup_alias(os_client, unique_index_prefix)
             cleanup_alias(os_client, alias_name)
 
 
