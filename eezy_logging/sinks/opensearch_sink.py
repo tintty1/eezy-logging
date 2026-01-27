@@ -226,6 +226,8 @@ class OpenSearchSink(Sink):
         index_prefix: Prefix for index names. Defaults to "eezy-logs".
         index_date_format: Date format for index suffix. Defaults to "%Y.%m.%d".
             Set to None to disable date-based indices.
+        index_aliases: List of aliases to assign to indices. If not provided,
+            defaults to [index_prefix]. Set to empty list to disable aliases.
         setup_index_template: Whether to create an index template on setup.
             Defaults to True.
         setup_ism_policy: Whether to create an ISM policy on setup. Defaults to True.
@@ -301,6 +303,7 @@ class OpenSearchSink(Sink):
         client: OpenSearch | None = None,
         index_prefix: str = "eezy-logs",
         index_date_format: str | None = "%Y.%m.%d",
+        index_aliases: list[str] | None = None,
         setup_index_template: bool = True,
         setup_ism_policy: bool = True,
         ism_policy_name: str | None = None,
@@ -315,6 +318,7 @@ class OpenSearchSink(Sink):
         self._owns_client = client is None
         self._index_prefix = index_prefix
         self._index_date_format = index_date_format
+        self._index_aliases = index_aliases if index_aliases is not None else [index_prefix]
         self._setup_index_template = setup_index_template
         self._setup_ism_policy = setup_ism_policy
         self._ism_policy_name = ism_policy_name or f"{index_prefix}-policy"
@@ -371,15 +375,22 @@ class OpenSearchSink(Sink):
         # Use custom mappings if provided, otherwise use defaults
         mappings = self._custom_mappings if self._custom_mappings else DEFAULT_LOG_MAPPINGS
 
+        # Build template body
+        template_body: dict[str, Any] = {
+            "index_patterns": [f"{self._index_prefix}-*"],
+            "settings": settings,
+            "mappings": mappings,
+        }
+
+        # Add aliases if configured
+        if self._index_aliases:
+            template_body["aliases"] = {alias: {} for alias in self._index_aliases}
+
         try:
             # OpenSearch uses legacy template API
             client.indices.put_template(
                 name=template_name,
-                body={
-                    "index_patterns": [f"{self._index_prefix}-*"],
-                    "settings": settings,
-                    "mappings": mappings,
-                },
+                body=template_body,
             )
             _logger.debug("eezy-logging: Created index template '%s'", template_name)
         except Exception as e:

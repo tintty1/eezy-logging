@@ -358,6 +358,132 @@ class TestOpenSearchRollover:
             cleanup_ism_policy(os_client, policy_name)
 
 
+class TestIndexAliases:
+    """Tests for index alias configuration."""
+
+    def test_default_alias_uses_index_prefix(self, os_client: OpenSearch, unique_index_prefix: str):
+        """Test that default alias is the index_prefix."""
+        sink = OpenSearchSink(
+            client=os_client,
+            index_prefix=unique_index_prefix,
+            setup_ism_policy=False,
+        )
+
+        try:
+            sink.setup()
+
+            # Check template includes default alias
+            template_name = f"{unique_index_prefix}-template"
+            response = os_client.indices.get_template(name=template_name)
+            template = response[template_name]
+
+            # Verify aliases section exists with index_prefix as alias
+            assert "aliases" in template
+            assert unique_index_prefix in template["aliases"]
+        finally:
+            cleanup_template(os_client, f"{unique_index_prefix}-template")
+
+    def test_custom_aliases(self, os_client: OpenSearch, unique_index_prefix: str):
+        """Test that custom aliases are applied to index template."""
+        custom_aliases = ["logs", "app-logs", "production"]
+        sink = OpenSearchSink(
+            client=os_client,
+            index_prefix=unique_index_prefix,
+            index_aliases=custom_aliases,
+            setup_ism_policy=False,
+        )
+
+        try:
+            sink.setup()
+
+            # Check template includes custom aliases
+            template_name = f"{unique_index_prefix}-template"
+            response = os_client.indices.get_template(name=template_name)
+            template = response[template_name]
+
+            # Verify all custom aliases are present
+            assert "aliases" in template
+            for alias in custom_aliases:
+                assert alias in template["aliases"]
+
+            # Verify index_prefix is NOT in aliases (since we provided custom ones)
+            assert unique_index_prefix not in template["aliases"]
+        finally:
+            cleanup_template(os_client, f"{unique_index_prefix}-template")
+            for alias in custom_aliases:
+                cleanup_alias(os_client, alias)
+
+    def test_empty_aliases_list_disables_aliases(
+        self, os_client: OpenSearch, unique_index_prefix: str
+    ):
+        """Test that empty aliases list disables alias creation."""
+        sink = OpenSearchSink(
+            client=os_client,
+            index_prefix=unique_index_prefix,
+            index_aliases=[],
+            setup_ism_policy=False,
+        )
+
+        try:
+            sink.setup()
+
+            # Check template does not include aliases section
+            template_name = f"{unique_index_prefix}-template"
+            response = os_client.indices.get_template(name=template_name)
+            template = response[template_name]
+
+            # Aliases section should be absent or empty
+            aliases = template.get("aliases", {})
+            assert len(aliases) == 0
+        finally:
+            cleanup_template(os_client, f"{unique_index_prefix}-template")
+
+    def test_query_via_alias(self, os_client: OpenSearch, unique_index_prefix: str):
+        """Test that documents can be queried using the alias."""
+        alias_name = "test-logs-alias"
+        sink = OpenSearchSink(
+            client=os_client,
+            index_prefix=unique_index_prefix,
+            index_aliases=[alias_name],
+            setup_ism_policy=False,
+        )
+
+        try:
+            sink.setup()
+
+            # Write documents
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": f"Test message {i}",
+                        "level": "INFO",
+                        "logger": "test",
+                    }
+                    for i in range(5)
+                ]
+            )
+
+            # Wait for documents to be indexed
+            wait_for_docs(os_client, f"{unique_index_prefix}-*", 5)
+
+            # Query via alias name
+            os_client.indices.refresh(index=alias_name)
+            response = os_client.search(
+                index=alias_name,
+                body={"query": {"match_all": {}}, "size": 10},
+            )
+
+            # Verify we can query via alias
+            assert response["hits"]["total"]["value"] == 5
+            messages = {hit["_source"]["message"] for hit in response["hits"]["hits"]}
+            assert messages == {f"Test message {i}" for i in range(5)}
+        finally:
+            cleanup_indices(os_client, f"{unique_index_prefix}-*")
+            cleanup_template(os_client, f"{unique_index_prefix}-template")
+            cleanup_alias(os_client, alias_name)
+
+
 class TestCustomIndexSettings:
     """Tests for custom index settings and mappings."""
 
