@@ -544,3 +544,184 @@ class TestCustomISMPolicy:
         finally:
             cleanup_template(os_client, f"{unique_index_prefix}-template")
             cleanup_ism_policy(os_client, policy_name)
+
+    def test_ism_policy_without_warm(self, os_client: OpenSearch, unique_index_prefix: str):
+        """Test ISM policy without warm phase (hot -> delete)."""
+        policy_name = f"{unique_index_prefix}-policy"
+        custom_policy = ISMPolicy(
+            rollover_min_index_age="1d",
+            warm_after=None,  # Skip warm phase
+            delete_after="30d",
+        )
+        sink = OpenSearchSink(
+            client=os_client,
+            index_prefix=unique_index_prefix,
+            setup_ism_policy=True,
+            ism_policy_name=policy_name,
+            ism_policy=custom_policy,
+        )
+
+        try:
+            sink.setup()
+
+            response = os_client.transport.perform_request(
+                "GET",
+                f"/_plugins/_ism/policies/{policy_name}",
+            )
+            policy = response["policy"]
+            states = {s["name"]: s for s in policy["states"]}
+
+            # Should not have warm state
+            assert "warm" not in states
+            assert "hot" in states
+            assert "delete" in states
+
+            # Hot state should transition directly to delete
+            hot_transitions = states["hot"]["transitions"]
+            assert len(hot_transitions) == 1
+            assert hot_transitions[0]["state_name"] == "delete"
+            assert hot_transitions[0]["conditions"]["min_index_age"] == "30d"
+        finally:
+            cleanup_template(os_client, f"{unique_index_prefix}-template")
+            cleanup_ism_policy(os_client, policy_name)
+
+    def test_ism_policy_without_warm_or_delete(
+        self, os_client: OpenSearch, unique_index_prefix: str
+    ):
+        """Test ISM policy with only hot state (no warm, no delete)."""
+        policy_name = f"{unique_index_prefix}-policy"
+        custom_policy = ISMPolicy(
+            rollover_min_index_age="7d",
+            warm_after=None,  # Skip warm phase
+            delete_after=None,  # Keep forever
+        )
+        sink = OpenSearchSink(
+            client=os_client,
+            index_prefix=unique_index_prefix,
+            setup_ism_policy=True,
+            ism_policy_name=policy_name,
+            ism_policy=custom_policy,
+        )
+
+        try:
+            sink.setup()
+
+            response = os_client.transport.perform_request(
+                "GET",
+                f"/_plugins/_ism/policies/{policy_name}",
+            )
+            policy = response["policy"]
+            states = {s["name"]: s for s in policy["states"]}
+
+            # Should only have hot state
+            assert "hot" in states
+            assert "warm" not in states
+            assert "delete" not in states
+
+            # Hot state should have no transitions
+            hot_transitions = states["hot"]["transitions"]
+            assert len(hot_transitions) == 0
+        finally:
+            cleanup_template(os_client, f"{unique_index_prefix}-template")
+            cleanup_ism_policy(os_client, policy_name)
+
+    def test_ism_policy_with_custom_json(self, os_client: OpenSearch, unique_index_prefix: str):
+        """Test ISM policy using custom JSON policy body."""
+        policy_name = f"{unique_index_prefix}-policy"
+
+        # Custom policy JSON (other attributes should be ignored)
+        custom_json = {
+            "description": "My custom ISM policy",
+            "default_state": "ingest",
+            "states": [
+                {
+                    "name": "ingest",
+                    "actions": [
+                        {
+                            "rollover": {
+                                "min_index_age": "2d",
+                                "min_size": "5gb",
+                            }
+                        }
+                    ],
+                    "transitions": [
+                        {
+                            "state_name": "search",
+                            "conditions": {
+                                "min_index_age": "5d",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "name": "search",
+                    "actions": [
+                        {"read_only": {}},
+                    ],
+                    "transitions": [
+                        {
+                            "state_name": "delete",
+                            "conditions": {
+                                "min_index_age": "60d",
+                            },
+                        }
+                    ],
+                },
+                {
+                    "name": "delete",
+                    "actions": [{"delete": {}}],
+                    "transitions": [],
+                },
+            ],
+        }
+
+        custom_policy = ISMPolicy(
+            policy_json=custom_json,
+            # These should be ignored:
+            rollover_min_index_age="100d",
+            warm_after="200d",
+            delete_after="300d",
+        )
+
+        sink = OpenSearchSink(
+            client=os_client,
+            index_prefix=unique_index_prefix,
+            setup_ism_policy=True,
+            ism_policy_name=policy_name,
+            ism_policy=custom_policy,
+        )
+
+        try:
+            sink.setup()
+
+            response = os_client.transport.perform_request(
+                "GET",
+                f"/_plugins/_ism/policies/{policy_name}",
+            )
+            policy = response["policy"]
+
+            # Verify custom policy was used
+            assert policy["description"] == "My custom ISM policy"
+            assert policy["default_state"] == "ingest"
+
+            states = {s["name"]: s for s in policy["states"]}
+
+            # Should have custom states, not default ones
+            assert "ingest" in states
+            assert "search" in states
+            assert "delete" in states
+            assert "hot" not in states
+            assert "warm" not in states
+
+            # Verify custom rollover conditions
+            ingest_actions = states["ingest"]["actions"]
+            rollover = ingest_actions[0]["rollover"]
+            assert rollover["min_index_age"] == "2d"
+            assert rollover["min_size"] == "5gb"
+
+            # Verify ism_template was added automatically
+            assert "ism_template" in policy
+            assert policy["ism_template"][0]["index_patterns"] == [f"{unique_index_prefix}-*"]
+        finally:
+            cleanup_template(os_client, f"{unique_index_prefix}-template")
+            cleanup_ism_policy(os_client, policy_name)

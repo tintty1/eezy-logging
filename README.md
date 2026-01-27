@@ -264,16 +264,82 @@ sink = OpenSearchSink(
     retry_delay=1.0,                 # Initial retry delay (exponential backoff)
 )
 
-# Custom ISM policy
+# Custom ISM policy - standard configuration
 policy = ISMPolicy(
     rollover_min_index_age="1d",
     rollover_min_size="10gb",
     rollover_min_doc_count=1000000,
-    warm_after="7d",
+    warm_after="7d",        # Move to warm state after 7 days
+    delete_after="30d",     # Delete after 30 days
+)
+sink = OpenSearchSink(
+    index_prefix="myapp-logs",
+    ism_policy=policy,
+)
+
+# Skip warm phase (hot -> delete directly)
+policy = ISMPolicy(
+    rollover_min_index_age="1d",
+    rollover_min_size="10gb",
+    warm_after=None,        # Skip warm phase entirely
     delete_after="30d",
 )
 sink = OpenSearchSink(
     index_prefix="myapp-logs",
+    ism_policy=policy,
+)
+
+# Keep data forever (no deletion)
+policy = ISMPolicy(
+    rollover_min_index_age="7d",
+    rollover_min_size="50gb",
+    warm_after="30d",
+    delete_after=None,      # Keep data forever
+)
+sink = OpenSearchSink(
+    index_prefix="audit-logs",
+    ism_policy=policy,
+)
+
+# Advanced: Custom JSON policy for complete control
+# Useful for multi-tier architectures (hot/warm/cold/delete)
+policy = ISMPolicy(
+    policy_json={
+        "description": "Multi-tier policy",
+        "default_state": "hot",
+        "states": [
+            {
+                "name": "hot",
+                "actions": [{"rollover": {"min_index_age": "1d", "min_size": "5gb"}}],
+                "transitions": [{"state_name": "warm", "conditions": {"min_index_age": "3d"}}]
+            },
+            {
+                "name": "warm",
+                "actions": [
+                    {"replica_count": {"number_of_replicas": 1}},
+                    {"force_merge": {"max_num_segments": 1}}
+                ],
+                "transitions": [{"state_name": "cold", "conditions": {"min_index_age": "7d"}}]
+            },
+            {
+                "name": "cold",
+                "actions": [
+                    {"read_only": {}},
+                    {"replica_count": {"number_of_replicas": 0}}
+                ],
+                "transitions": [{"state_name": "delete", "conditions": {"min_index_age": "90d"}}]
+            },
+            {
+                "name": "delete",
+                "actions": [{"delete": {}}],
+                "transitions": []
+            }
+        ]
+        # ism_template is added automatically if not present
+    }
+)
+sink = OpenSearchSink(
+    index_prefix="app-logs",
     ism_policy=policy,
 )
 
@@ -309,6 +375,13 @@ client = OpenSearch(
 )
 sink = OpenSearchSink(client=client, index_prefix="myapp-logs")
 ```
+
+**ISM Policy Options:**
+
+- **Standard lifecycle**: `warm_after="7d"` + `delete_after="30d"` (default: hot → warm → delete)
+- **Skip warm phase**: `warm_after=None` + `delete_after="30d"` (hot → delete)
+- **Keep forever**: `delete_after=None` (no deletion)
+- **Custom JSON**: `policy_json={...}` for complete control (other attributes ignored)
 
 **Environment variables** (used when client is not provided):
 

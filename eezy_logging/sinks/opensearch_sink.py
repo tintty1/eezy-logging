@@ -31,10 +31,13 @@ class ISMPolicy:
     This defines states and transitions for index management.
 
     Attributes:
+        policy_json: Custom JSON policy body. If set, all other attributes are ignored.
+            This should be the complete policy definition (without the outer "policy" key).
         rollover_min_index_age: Min age before rolling over (e.g., "7d", "24h").
         rollover_min_size: Min size before rolling over (e.g., "50gb").
         rollover_min_doc_count: Min documents before rolling over.
         warm_after: Time after rollover to move to warm/read-only state.
+            Set to None to skip the warm phase entirely.
         delete_after: Time after rollover to delete index. None to keep forever.
         force_merge_segments: Number of segments to force merge to.
         description: Description for the ISM policy.
@@ -46,15 +49,34 @@ class ISMPolicy:
             rollover_min_size="10gb",
             delete_after="30d",
         )
+
+        # Custom JSON policy
+        policy = ISMPolicy(
+            policy_json={
+                "description": "Custom policy",
+                "default_state": "hot",
+                "states": [...],
+            }
+        )
+
+        # Skip warm phase
+        policy = ISMPolicy(
+            rollover_min_index_age="1d",
+            warm_after=None,
+            delete_after="30d",
+        )
     """
+
+    # Custom JSON policy (overrides all other settings)
+    policy_json: dict[str, Any] | None = None
 
     # Rollover conditions
     rollover_min_index_age: str = "7d"
     rollover_min_size: str = "50gb"
     rollover_min_doc_count: int | None = None
 
-    # Warm/read-only state
-    warm_after: str = "30d"
+    # Warm/read-only state (None to skip warm phase)
+    warm_after: str | None = "30d"
     force_merge_segments: int = 1
 
     # Delete state (optional - None means keep forever)
@@ -64,7 +86,24 @@ class ISMPolicy:
     description: str = "eezy-logging ISM policy for log index management"
 
     def to_policy_body(self, policy_id: str, index_patterns: list[str]) -> dict[str, Any]:
-        """Convert to OpenSearch ISM policy body."""
+        """Convert to OpenSearch ISM policy body.
+
+        If policy_json is set, it takes precedence and other attributes are ignored.
+        The ism_template is automatically added to apply the policy to matching indices.
+        """
+        # If custom JSON policy is provided, use it directly
+        if self.policy_json:
+            policy_body = dict(self.policy_json)  # Make a copy
+            # Ensure ism_template is present to apply to indices
+            if "ism_template" not in policy_body:
+                policy_body["ism_template"] = [
+                    {
+                        "index_patterns": index_patterns,
+                        "priority": 100,
+                    }
+                ]
+            return {"policy": policy_body}
+
         # Build rollover conditions
         rollover_conditions: dict[str, Any] = {
             "min_index_age": self.rollover_min_index_age,
@@ -73,44 +112,64 @@ class ISMPolicy:
         if self.rollover_min_doc_count:
             rollover_conditions["min_doc_count"] = self.rollover_min_doc_count
 
-        # States: hot -> warm -> (delete)
-        states = [
-            {
-                "name": "hot",
-                "actions": [
-                    {
-                        "rollover": rollover_conditions,
-                    }
-                ],
-                "transitions": [
-                    {
-                        "state_name": "warm",
-                        "conditions": {
-                            "min_index_age": self.warm_after,
-                        },
-                    }
-                ],
-            },
-            {
+        # Start with hot state
+        states = []
+        hot_state: dict[str, Any] = {
+            "name": "hot",
+            "actions": [
+                {
+                    "rollover": rollover_conditions,
+                }
+            ],
+            "transitions": [],
+        }
+
+        # Determine the next state after hot
+        next_state_after_hot = None
+        if self.warm_after is not None:
+            next_state_after_hot = "warm"
+        elif self.delete_after is not None:
+            next_state_after_hot = "delete"
+
+        # Add transition from hot to next state
+        if next_state_after_hot:
+            transition_age = self.warm_after if self.warm_after else self.delete_after
+            hot_state["transitions"] = [
+                {
+                    "state_name": next_state_after_hot,
+                    "conditions": {
+                        "min_index_age": transition_age,
+                    },
+                }
+            ]
+
+        states.append(hot_state)
+
+        if self.warm_after is not None:
+            warm_state: dict[str, Any] = {
                 "name": "warm",
                 "actions": [
                     {"read_only": {}},
                     {"force_merge": {"max_num_segments": self.force_merge_segments}},
                 ],
                 "transitions": [],
-            },
-        ]
+            }
 
-        # Add delete transition if configured
+            # Add delete transition if configured
+            if self.delete_after:
+                warm_state["transitions"] = [
+                    {
+                        "state_name": "delete",
+                        "conditions": {
+                            "min_index_age": self.delete_after,
+                        },
+                    }
+                ]
+
+            states.append(warm_state)
+
+        # Add delete state if configured
         if self.delete_after:
-            states[1]["transitions"] = [
-                {
-                    "state_name": "delete",
-                    "conditions": {
-                        "min_index_age": self.delete_after,
-                    },
-                }
-            ]
             states.append(
                 {
                     "name": "delete",
@@ -172,6 +231,8 @@ class OpenSearchSink(Sink):
         setup_ism_policy: Whether to create an ISM policy on setup. Defaults to True.
         ism_policy_name: Name of the ISM policy. Defaults to "{index_prefix}-policy".
         ism_policy: Custom ISM policy configuration. Defaults to ISMPolicy().
+            Can use policy_json for complete control, or warm_after=None to skip
+            the warm phase.
         custom_index_settings: Custom index settings to merge with defaults.
             These will override default settings like number_of_shards and
             number_of_replicas. Example: {"refresh_interval": "30s"}
@@ -201,6 +262,30 @@ class OpenSearchSink(Sink):
             rollover_min_index_age="1d",
             rollover_min_size="10gb",
             delete_after="30d",
+        )
+        sink = OpenSearchSink(
+            index_prefix="myapp-logs",
+            ism_policy=policy,
+        )
+
+        # Skip warm phase (hot -> delete)
+        policy = ISMPolicy(
+            rollover_min_index_age="1d",
+            warm_after=None,  # Skip warm phase
+            delete_after="30d",
+        )
+        sink = OpenSearchSink(
+            index_prefix="myapp-logs",
+            ism_policy=policy,
+        )
+
+        # Custom JSON policy
+        policy = ISMPolicy(
+            policy_json={
+                "description": "Custom policy",
+                "default_state": "hot",
+                "states": [...],
+            }
         )
         sink = OpenSearchSink(
             index_prefix="myapp-logs",
