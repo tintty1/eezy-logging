@@ -348,7 +348,7 @@ class OpenSearchSink(Sink):
         return self._client
 
     def setup(self) -> None:
-        """Create index template and ISM policy if configured."""
+        """Create index template, ISM policy, and initial index if configured."""
         client = self._get_client()
 
         if self._setup_ism_policy:
@@ -356,6 +356,9 @@ class OpenSearchSink(Sink):
 
         if self._setup_index_template:
             self._create_index_template(client)
+
+        # Create initial index with write alias if it doesn't exist
+        self._create_initial_index(client)
 
     def _create_ism_policy(self, client: OpenSearch) -> None:
         """Create ISM policy for automatic index lifecycle management."""
@@ -410,6 +413,47 @@ class OpenSearchSink(Sink):
             _logger.debug("eezy-logging: Created index template '%s'", template_name)
         except Exception as e:
             _logger.warning("eezy-logging: Could not create index template: %s", e)
+
+    def _create_initial_index(self, client: OpenSearch) -> None:
+        """Create initial index with write alias if it doesn't exist.
+
+        This is required for rollover to work. The alias must point to an index
+        with is_write_index=true before any documents can be written.
+
+        Only creates an initial index if the alias doesn't exist yet.
+        If the alias exists (from previous rollovers), we don't touch anything.
+        """
+        # Check if alias already exists - if so, setup is already complete
+        try:
+            if client.indices.exists_alias(name=self._index_prefix):
+                _logger.debug(
+                    "eezy-logging: Alias '%s' already exists, skipping initial index creation",
+                    self._index_prefix,
+                )
+                return
+        except Exception:
+            pass  # Alias doesn't exist, continue with creation
+
+        # Create initial index with -000001 suffix
+        initial_index = f"{self._index_prefix}-000001"
+
+        try:
+            client.indices.create(
+                index=initial_index,
+                body={
+                    "aliases": {
+                        self._index_prefix: {"is_write_index": True},
+                    }
+                },
+            )
+            _logger.debug(
+                "eezy-logging: Created initial index '%s' with write alias '%s'",
+                initial_index,
+                self._index_prefix,
+            )
+        except Exception as e:
+            # Index might already exist from a previous partial setup, or other error
+            _logger.error("eezy-logging: Could not create initial index: %s", e)
 
     def write_batch(self, records: list[dict[str, Any]]) -> WriteResult:
         """Write a batch of records to OpenSearch using bulk API.
