@@ -181,25 +181,83 @@ from eezy_logging.sinks import ElasticsearchSink, ILMPolicy
 
 # Using environment variables or defaults
 sink = ElasticsearchSink(
-    index_prefix="myapp-logs",      # Index name prefix
-    index_date_format="%Y.%m.%d",   # Date suffix format (None to disable)
-    setup_index_template=True,       # Create index template on setup
-    setup_ilm_policy=True,           # Create ILM policy on setup
-    max_retries=3,                   # Retry attempts for failed writes
-    retry_delay=1.0,                 # Initial retry delay (exponential backoff)
+    index_prefix="myapp-logs",        # Index name prefix (also used as rollover alias)
+    setup_index_template=True,        # Create index template on setup
+    setup_ilm_policy=True,            # Create ILM policy on setup
 )
 
-# Custom ILM policy
+# Custom ILM policy - standard configuration
 policy = ILMPolicy(
     rollover_max_age="1d",
     rollover_max_size="10gb",
     rollover_max_docs=1000000,
-    warm_after="7d",
+    warm_after="7d",         # Move to warm phase after 7 days
+    delete_after="30d",      # Delete after 30 days
+)
+sink = ElasticsearchSink(
+    index_prefix="myapp-logs",
+    ilm_policy=policy,
+)
+
+# Skip warm phase (hot -> delete directly)
+policy = ILMPolicy(
+    rollover_max_age="1d",
+    rollover_max_size="10gb",
+    warm_after=None,         # Skip warm phase entirely
     delete_after="30d",
 )
 sink = ElasticsearchSink(
     index_prefix="myapp-logs",
     ilm_policy=policy,
+)
+
+# Keep data forever (no deletion)
+policy = ILMPolicy(
+    rollover_max_age="7d",
+    rollover_max_size="50gb",
+    warm_after="30d",
+    delete_after=None,       # Keep data forever
+)
+sink = ElasticsearchSink(
+    index_prefix="audit-logs",
+    ilm_policy=policy,
+)
+
+# Advanced: Custom JSON policy for complete control
+policy = ILMPolicy(
+    policy_json={
+        "phases": {
+            "hot": {
+                "min_age": "0ms",
+                "actions": {"rollover": {"max_age": "1d", "max_size": "10gb"}}
+            },
+            "warm": {
+                "min_age": "7d",
+                "actions": {
+                    "shrink": {"number_of_shards": 1},
+                    "forcemerge": {"max_num_segments": 1}
+                }
+            },
+            "cold": {
+                "min_age": "30d",
+                "actions": {"readonly": {}}
+            },
+            "delete": {
+                "min_age": "90d",
+                "actions": {"delete": {}}
+            }
+        }
+    }
+)
+sink = ElasticsearchSink(
+    index_prefix="app-logs",
+    ilm_policy=policy,
+)
+
+# Additional index aliases (index_prefix is always the rollover alias)
+sink = ElasticsearchSink(
+    index_prefix="myapp-logs",
+    index_aliases=["logs", "production-logs"],  # Extra aliases for querying
 )
 
 # Custom index settings
@@ -234,6 +292,13 @@ client = Elasticsearch(
 )
 sink = ElasticsearchSink(client=client, index_prefix="myapp-logs")
 ```
+
+**ILM Policy Options:**
+
+- **Standard lifecycle**: `warm_after="7d"` + `delete_after="30d"` (default: hot -> warm -> delete)
+- **Skip warm phase**: `warm_after=None` + `delete_after="30d"` (hot -> delete)
+- **Keep forever**: `delete_after=None` (no deletion)
+- **Custom JSON**: `policy_json={...}` for complete control (other attributes ignored)
 
 **Environment variables** (used when client is not provided):
 
@@ -338,6 +403,12 @@ policy = ISMPolicy(
 sink = OpenSearchSink(
     index_prefix="app-logs",
     ism_policy=policy,
+)
+
+# Additional index aliases (index_prefix is always the rollover alias)
+sink = OpenSearchSink(
+    index_prefix="myapp-logs",
+    index_aliases=["logs", "production-logs"],  # Extra aliases for querying
 )
 
 # Custom index settings
