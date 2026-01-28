@@ -372,21 +372,26 @@ class TestIndexAliases:
         try:
             sink.setup()
 
-            # Check template includes default alias
+            # Check template exists
             template_name = f"{unique_index_prefix}-template"
             response = os_client.indices.get_template(name=template_name)
             template = response[template_name]
 
-            # Verify aliases section exists with index_prefix as alias
-            assert "aliases" in template
-            assert unique_index_prefix in template["aliases"]
-            # Should only have one alias (index_prefix)
-            assert len(template["aliases"]) == 1
+            # The rollover alias (index_prefix) should NOT be in the template aliases
+            # because it's managed via _create_initial_index with is_write_index=True
+            # Template aliases should be empty when no custom aliases are provided
+            if "aliases" in template:
+                assert unique_index_prefix not in template["aliases"]
+
+            # But the rollover alias should exist on the initial index
+            assert os_client.indices.exists_alias(name=unique_index_prefix)
         finally:
+            cleanup_indices(os_client, f"{unique_index_prefix}-*")
             cleanup_template(os_client, f"{unique_index_prefix}-template")
+            cleanup_alias(os_client, unique_index_prefix)
 
     def test_custom_aliases(self, os_client: OpenSearch, unique_index_prefix: str):
-        """Test that custom aliases are applied and index_prefix is always included."""
+        """Test that custom aliases are applied in the template."""
         custom_aliases = ["logs", "app-logs", "production"]
         sink = OpenSearchSink(
             client=os_client,
@@ -403,26 +408,31 @@ class TestIndexAliases:
             response = os_client.indices.get_template(name=template_name)
             template = response[template_name]
 
-            # Verify all custom aliases are present
+            # Verify all custom aliases are present in template
             assert "aliases" in template
             for alias in custom_aliases:
                 assert alias in template["aliases"]
 
-            # Verify index_prefix is ALSO included (always added for rollover support)
-            assert unique_index_prefix in template["aliases"]
+            # The rollover alias (index_prefix) should NOT be in the template
+            # It's managed via _create_initial_index with is_write_index=True
+            assert unique_index_prefix not in template["aliases"]
 
-            # Should have 4 aliases total: index_prefix + 3 custom
-            assert len(template["aliases"]) == 4
+            # Should have 3 aliases total (only custom, not index_prefix)
+            assert len(template["aliases"]) == 3
+
+            # But the rollover alias should exist on the initial index
+            assert os_client.indices.exists_alias(name=unique_index_prefix)
         finally:
+            cleanup_indices(os_client, f"{unique_index_prefix}-*")
             cleanup_template(os_client, f"{unique_index_prefix}-template")
             cleanup_alias(os_client, unique_index_prefix)
             for alias in custom_aliases:
                 cleanup_alias(os_client, alias)
 
-    def test_empty_aliases_list_still_includes_index_prefix(
+    def test_empty_aliases_list_still_has_rollover_alias(
         self, os_client: OpenSearch, unique_index_prefix: str
     ):
-        """Test that even with empty aliases list, index_prefix is always included."""
+        """Test that even with empty aliases list, rollover alias is created on initial index."""
         sink = OpenSearchSink(
             client=os_client,
             index_prefix=unique_index_prefix,
@@ -433,17 +443,21 @@ class TestIndexAliases:
         try:
             sink.setup()
 
-            # Check template includes index_prefix alias
+            # Check template exists but has no aliases
             template_name = f"{unique_index_prefix}-template"
             response = os_client.indices.get_template(name=template_name)
             template = response[template_name]
 
-            # index_prefix should always be present for rollover support
-            assert "aliases" in template
-            assert unique_index_prefix in template["aliases"]
-            assert len(template["aliases"]) == 1
+            # Template should have no aliases (rollover alias is managed separately)
+            if "aliases" in template:
+                assert len(template["aliases"]) == 0
+
+            # But the rollover alias should exist on the initial index
+            assert os_client.indices.exists_alias(name=unique_index_prefix)
         finally:
+            cleanup_indices(os_client, f"{unique_index_prefix}-*")
             cleanup_template(os_client, f"{unique_index_prefix}-template")
+            cleanup_alias(os_client, unique_index_prefix)
 
     def test_query_via_alias(self, os_client: OpenSearch, unique_index_prefix: str):
         """Test that documents can be queried using the alias."""
