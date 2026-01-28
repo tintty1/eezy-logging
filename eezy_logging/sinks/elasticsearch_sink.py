@@ -51,14 +51,18 @@ class ILMPolicy:
     hot -> warm -> cold -> delete
 
     Attributes:
+        policy_json: Custom JSON policy body. If set, all other attributes are ignored.
+            This should be the complete policy definition (without the outer "policy" key).
         rollover_max_age: Max age before rolling over to a new index (e.g., "7d", "24h").
         rollover_max_size: Max size before rolling over (e.g., "50gb", "10gb").
         rollover_max_docs: Max documents before rolling over (e.g., 1000000).
         warm_after: Time after rollover to move to warm phase (e.g., "30d").
+            Set to None to skip the warm phase entirely.
         warm_shrink_shards: Number of shards to shrink to in warm phase.
         warm_force_merge_segments: Number of segments to force merge to in warm phase.
         cold_after: Time after rollover to move to cold phase (e.g., "60d"). None to skip.
         delete_after: Time after rollover to delete index (e.g., "90d"). None to keep forever.
+        description: Description for the ILM policy.
 
     Example:
         # Keep logs for 30 days, delete after
@@ -75,15 +79,35 @@ class ILMPolicy:
             cold_after="30d",
             delete_after="365d",
         )
+
+        # Skip warm phase (hot -> delete)
+        policy = ILMPolicy(
+            rollover_max_age="1d",
+            warm_after=None,
+            delete_after="30d",
+        )
+
+        # Custom JSON policy
+        policy = ILMPolicy(
+            policy_json={
+                "phases": {
+                    "hot": {"min_age": "0ms", "actions": {"rollover": {"max_age": "1d"}}},
+                    "delete": {"min_age": "30d", "actions": {"delete": {}}},
+                }
+            }
+        )
     """
+
+    # Custom JSON policy (overrides all other settings)
+    policy_json: dict[str, Any] | None = None
 
     # Hot phase - rollover conditions
     rollover_max_age: str = "7d"
     rollover_max_size: str = "50gb"
     rollover_max_docs: int | None = None
 
-    # Warm phase
-    warm_after: str = "30d"
+    # Warm phase (None to skip warm phase)
+    warm_after: str | None = "30d"
     warm_shrink_shards: int = 1
     warm_force_merge_segments: int = 1
 
@@ -93,8 +117,18 @@ class ILMPolicy:
     # Delete phase (optional - None means keep forever)
     delete_after: str | None = "90d"
 
+    # ILM policy description
+    description: str = "eezy-logging ILM policy for log index management"
+
     def to_policy_body(self) -> dict[str, Any]:
-        """Convert to Elasticsearch ILM policy body."""
+        """Convert to Elasticsearch ILM policy body.
+
+        If policy_json is set, it takes precedence and other attributes are ignored.
+        """
+        # If custom JSON policy is provided, use it directly
+        if self.policy_json:
+            return {"policy": dict(self.policy_json)}
+
         # Hot phase with rollover
         rollover_conditions: dict[str, Any] = {
             "max_age": self.rollover_max_age,
@@ -112,13 +146,15 @@ class ILMPolicy:
             },
         }
 
-        phases["warm"] = {
-            "min_age": self.warm_after,
-            "actions": {
-                "shrink": {"number_of_shards": self.warm_shrink_shards},
-                "forcemerge": {"max_num_segments": self.warm_force_merge_segments},
-            },
-        }
+        # Add warm phase if configured
+        if self.warm_after is not None:
+            phases["warm"] = {
+                "min_age": self.warm_after,
+                "actions": {
+                    "shrink": {"number_of_shards": self.warm_shrink_shards},
+                    "forcemerge": {"max_num_segments": self.warm_force_merge_segments},
+                },
+            }
 
         if self.cold_after:
             phases["cold"] = {
@@ -173,13 +209,18 @@ class ElasticsearchSink(Sink):
         client: Elasticsearch client instance. If not provided, a client will be
             created using environment variables or defaults.
         index_prefix: Prefix for index names. Defaults to "eezy-logs".
-        index_date_format: Date format for index suffix. Defaults to "%Y.%m.%d".
-            Set to None to disable date-based indices.
+            Also used as the primary alias for writing logs (required for rollover).
+            When using ILM rollover, indices will have numeric suffixes (-000001, -000002).
+        index_aliases: Additional aliases to assign to indices. The index_prefix
+            is always included as an alias (required for rollover). Specify additional
+            aliases here if needed. Example: ["logs", "app-logs"].
         setup_index_template: Whether to create an index template on setup.
             Defaults to True.
         setup_ilm_policy: Whether to create an ILM policy on setup. Defaults to True.
         ilm_policy_name: Name of the ILM policy. Defaults to "{index_prefix}-policy".
         ilm_policy: Custom ILM policy configuration. Defaults to ILMPolicy().
+            Can use policy_json for complete control, or warm_after=None to skip
+            the warm phase.
         custom_index_settings: Custom index settings to merge with defaults.
             These will override default settings like number_of_shards and
             number_of_replicas. Example: {"refresh_interval": "30s"}
@@ -208,6 +249,12 @@ class ElasticsearchSink(Sink):
         # Using environment variables or defaults
         sink = ElasticsearchSink(index_prefix="myapp-logs")
 
+        # Additional aliases (index_prefix is always included)
+        sink = ElasticsearchSink(
+            index_prefix="myapp-logs",
+            index_aliases=["logs", "production-logs"],  # myapp-logs also included
+        )
+
         # Custom ILM policy
         from eezy_logging.sinks import ElasticsearchSink, ILMPolicy
 
@@ -215,6 +262,31 @@ class ElasticsearchSink(Sink):
             rollover_max_age="1d",
             rollover_max_size="10gb",
             delete_after="30d",
+        )
+        sink = ElasticsearchSink(
+            index_prefix="myapp-logs",
+            ilm_policy=policy,
+        )
+
+        # Skip warm phase (hot -> delete)
+        policy = ILMPolicy(
+            rollover_max_age="1d",
+            warm_after=None,  # Skip warm phase
+            delete_after="30d",
+        )
+        sink = ElasticsearchSink(
+            index_prefix="myapp-logs",
+            ilm_policy=policy,
+        )
+
+        # Custom JSON policy
+        policy = ILMPolicy(
+            policy_json={
+                "phases": {
+                    "hot": {"min_age": "0ms", "actions": {"rollover": {"max_age": "1d"}}},
+                    "delete": {"min_age": "30d", "actions": {"delete": {}}},
+                }
+            }
         )
         sink = ElasticsearchSink(
             index_prefix="myapp-logs",
@@ -229,7 +301,7 @@ class ElasticsearchSink(Sink):
         self,
         client: Elasticsearch | None = None,
         index_prefix: str = "eezy-logs",
-        index_date_format: str | None = "%Y.%m.%d",
+        index_aliases: list[str] | None = None,
         setup_index_template: bool = True,
         setup_ilm_policy: bool = True,
         ilm_policy_name: str | None = None,
@@ -243,7 +315,17 @@ class ElasticsearchSink(Sink):
         self._client = client
         self._owns_client = client is None
         self._index_prefix = index_prefix
-        self._index_date_format = index_date_format
+
+        # Always include index_prefix in aliases for rollover support
+        # Additional aliases can be provided via index_aliases
+        if index_aliases is None:
+            self._index_aliases = [index_prefix]
+        else:
+            # Ensure index_prefix is always in the aliases list
+            self._index_aliases = list(index_aliases)
+            if index_prefix not in self._index_aliases:
+                self._index_aliases.insert(0, index_prefix)
+
         self._setup_index_template = setup_index_template
         self._setup_ilm_policy = setup_ilm_policy
         self._ilm_policy_name = ilm_policy_name or f"{index_prefix}-policy"
@@ -258,7 +340,7 @@ class ElasticsearchSink(Sink):
         return self._client
 
     def setup(self) -> None:
-        """Create index template and ILM policy if configured."""
+        """Create index template, ILM policy, and initial index if configured."""
         client = self._get_client()
 
         if self._setup_ilm_policy:
@@ -266,6 +348,9 @@ class ElasticsearchSink(Sink):
 
         if self._setup_index_template:
             self._create_index_template(client)
+
+        # Create initial index with write alias if it doesn't exist
+        self._create_initial_index(client)
 
     def _create_ilm_policy(self, client: Elasticsearch) -> None:
         """Create ILM policy for automatic index lifecycle management."""
@@ -297,6 +382,7 @@ class ElasticsearchSink(Sink):
 
         if self._setup_ilm_policy:
             settings["index.lifecycle.name"] = self._ilm_policy_name
+            settings["index.lifecycle.rollover_alias"] = self._index_prefix
 
         # Merge custom settings (will override defaults)
         settings.update(self._custom_index_settings)
@@ -305,6 +391,10 @@ class ElasticsearchSink(Sink):
         mappings = self._custom_mappings if self._custom_mappings else DEFAULT_LOG_MAPPINGS
 
         es_major_version = _get_es_client_major_version()
+
+        # Exclude index_prefix from template aliases since it's the rollover alias
+        # The rollover alias is managed separately via _create_initial_index with is_write_index
+        non_rollover_aliases = [a for a in self._index_aliases if a != self._index_prefix]
 
         if es_major_version >= 8:
             # ES 8.x+ uses composable templates
@@ -317,6 +407,11 @@ class ElasticsearchSink(Sink):
                     },
                     "priority": 100,
                 }
+                # Add non-rollover aliases if configured
+                if non_rollover_aliases:
+                    template_body["template"]["aliases"] = {
+                        alias: {} for alias in non_rollover_aliases
+                    }
                 client.indices.put_index_template(name=template_name, body=template_body)
                 _logger.debug("eezy-logging: Created index template '%s'", template_name)
             except Exception as e:
@@ -329,17 +424,54 @@ class ElasticsearchSink(Sink):
                     "settings": settings,
                     "mappings": mappings,
                 }
+                # Add non-rollover aliases if configured
+                if non_rollover_aliases:
+                    legacy_body["aliases"] = {alias: {} for alias in non_rollover_aliases}
                 client.indices.put_template(name=template_name, body=legacy_body)
                 _logger.debug("eezy-logging: Created legacy index template '%s'", template_name)
             except Exception as e:
                 _logger.warning("eezy-logging: Could not create index template: %s", e)
 
-    def _get_index_name(self) -> str:
-        """Generate the current index name based on date format."""
-        if self._index_date_format:
-            date_suffix = datetime.now(UTC).strftime(self._index_date_format)
-            return f"{self._index_prefix}-{date_suffix}"
-        return self._index_prefix
+    def _create_initial_index(self, client: Elasticsearch) -> None:
+        """Create initial index with write alias if it doesn't exist.
+
+        This is required for rollover to work. The alias must point to an index
+        with is_write_index=true before any documents can be written.
+
+        Only creates an initial index if the alias doesn't exist yet.
+        If the alias exists (from previous rollovers), we don't touch anything.
+        """
+        # Check if alias already exists - if so, setup is already complete
+        try:
+            if client.indices.exists_alias(name=self._index_prefix):
+                _logger.debug(
+                    "eezy-logging: Alias '%s' already exists, skipping initial index creation",
+                    self._index_prefix,
+                )
+                return
+        except Exception:
+            pass  # Alias doesn't exist, continue with creation
+
+        # Create initial index with -000001 suffix
+        initial_index = f"{self._index_prefix}-000001"
+
+        try:
+            client.indices.create(
+                index=initial_index,
+                body={
+                    "aliases": {
+                        self._index_prefix: {"is_write_index": True},
+                    }
+                },
+            )
+            _logger.debug(
+                "eezy-logging: Created initial index '%s' with write alias '%s'",
+                initial_index,
+                self._index_prefix,
+            )
+        except Exception as e:
+            # Index might already exist from a previous partial setup, or other error
+            _logger.debug("eezy-logging: Could not create initial index: %s", e)
 
     def write_batch(self, records: list[dict[str, Any]]) -> WriteResult:
         """Write a batch of records to Elasticsearch using bulk API.
@@ -347,12 +479,15 @@ class ElasticsearchSink(Sink):
         This method makes a single write attempt and returns immediately.
         Failed records are returned in the WriteResult for the worker to
         schedule retries without blocking.
+
+        Records are written to the index_prefix alias, which supports rollover.
         """
         if not records:
             return WriteResult.ok()
 
         client = self._get_client()
-        index_name = self._get_index_name()
+        # Write to the alias (index_prefix) for rollover support
+        index_name = self._index_prefix
 
         # Build bulk request body
         bulk_body: list[dict[str, Any]] = []

@@ -400,9 +400,11 @@ class OpenSearchSink(Sink):
             "mappings": mappings,
         }
 
-        # Add aliases if configured
-        if self._index_aliases:
-            template_body["aliases"] = {alias: {} for alias in self._index_aliases}
+        # Add aliases if configured (excluding index_prefix which is the rollover alias)
+        # The rollover alias is managed separately via _create_initial_index with is_write_index
+        non_rollover_aliases = [a for a in self._index_aliases if a != self._index_prefix]
+        if non_rollover_aliases:
+            template_body["aliases"] = {alias: {} for alias in non_rollover_aliases}
 
         try:
             # OpenSearch uses legacy template API

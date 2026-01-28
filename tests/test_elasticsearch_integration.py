@@ -750,5 +750,212 @@ class TestCustomILMPolicy:
             assert "warm" in phases
             assert "delete" in phases
         finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
             cleanup_template(es_client, f"{unique_index_prefix}-template")
             cleanup_ilm_policy(es_client, policy_name)
+
+    def test_ilm_policy_without_warm(self, es_client: Elasticsearch, unique_index_prefix: str):
+        """Test ILM policy without warm phase (hot -> delete)."""
+        policy_name = f"{unique_index_prefix}-policy"
+        custom_policy = ILMPolicy(
+            rollover_max_age="7d",
+            warm_after=None,  # Skip warm phase
+            delete_after="30d",
+        )
+        sink = ElasticsearchSink(
+            client=es_client,
+            index_prefix=unique_index_prefix,
+            setup_ilm_policy=True,
+            ilm_policy_name=policy_name,
+            ilm_policy=custom_policy,
+        )
+
+        try:
+            sink.setup()
+
+            response = get_ilm_policy(es_client, policy_name)
+            policy = response[policy_name]["policy"]
+            phases = policy["phases"]
+
+            # Should not have warm phase
+            assert "warm" not in phases
+            assert "hot" in phases
+            assert "delete" in phases
+        finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
+            cleanup_template(es_client, f"{unique_index_prefix}-template")
+            cleanup_ilm_policy(es_client, policy_name)
+
+    def test_custom_policy_json(self, es_client: Elasticsearch, unique_index_prefix: str):
+        """Test ILM policy with custom policy_json."""
+        policy_name = f"{unique_index_prefix}-policy"
+        custom_policy = ILMPolicy(
+            policy_json={
+                "phases": {
+                    "hot": {
+                        "min_age": "0ms",
+                        "actions": {
+                            "rollover": {"max_age": "2d", "max_size": "5gb"},
+                        },
+                    },
+                    "delete": {
+                        "min_age": "14d",
+                        "actions": {"delete": {}},
+                    },
+                }
+            }
+        )
+        sink = ElasticsearchSink(
+            client=es_client,
+            index_prefix=unique_index_prefix,
+            setup_ilm_policy=True,
+            ilm_policy_name=policy_name,
+            ilm_policy=custom_policy,
+        )
+
+        try:
+            sink.setup()
+
+            response = get_ilm_policy(es_client, policy_name)
+            policy = response[policy_name]["policy"]
+            phases = policy["phases"]
+
+            # Should match custom policy
+            assert "hot" in phases
+            assert "delete" in phases
+            assert "warm" not in phases
+
+            # Check custom rollover conditions
+            rollover = phases["hot"]["actions"]["rollover"]
+            assert rollover["max_age"] == "2d"
+            assert rollover["max_size"] == "5gb"
+        finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
+            cleanup_template(es_client, f"{unique_index_prefix}-template")
+            cleanup_ilm_policy(es_client, policy_name)
+
+
+class TestIndexAliases:
+    """Tests for index aliases functionality."""
+
+    def test_initial_index_created_with_write_alias(
+        self, es_client: Elasticsearch, unique_index_prefix: str
+    ):
+        """Test that initial index is created with write alias on setup."""
+        sink = ElasticsearchSink(
+            client=es_client,
+            index_prefix=unique_index_prefix,
+            setup_ilm_policy=False,
+        )
+
+        try:
+            sink.setup()
+
+            # Check that initial index exists
+            initial_index = f"{unique_index_prefix}-000001"
+            assert es_client.indices.exists(index=initial_index)
+
+            # Check that alias exists and points to initial index
+            alias_response = es_client.indices.get_alias(name=unique_index_prefix)
+            assert initial_index in alias_response
+
+            # Check is_write_index is True
+            alias_info = alias_response[initial_index]["aliases"][unique_index_prefix]
+            assert alias_info.get("is_write_index") is True
+        finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
+            cleanup_template(es_client, f"{unique_index_prefix}-template")
+            cleanup_alias(es_client, unique_index_prefix)
+
+    def test_setup_idempotent(self, es_client: Elasticsearch, unique_index_prefix: str):
+        """Test that calling setup multiple times is safe."""
+        sink = ElasticsearchSink(
+            client=es_client,
+            index_prefix=unique_index_prefix,
+            setup_ilm_policy=False,
+        )
+
+        try:
+            # Call setup multiple times
+            sink.setup()
+            sink.setup()
+            sink.setup()
+
+            # Should still only have one initial index
+            initial_index = f"{unique_index_prefix}-000001"
+            assert es_client.indices.exists(index=initial_index)
+
+            # Alias should still work
+            assert es_client.indices.exists_alias(name=unique_index_prefix)
+        finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
+            cleanup_template(es_client, f"{unique_index_prefix}-template")
+            cleanup_alias(es_client, unique_index_prefix)
+
+    def test_custom_index_aliases(self, es_client: Elasticsearch, unique_index_prefix: str):
+        """Test that additional index aliases are created."""
+        additional_alias = f"{unique_index_prefix}-extra"
+        sink = ElasticsearchSink(
+            client=es_client,
+            index_prefix=unique_index_prefix,
+            index_aliases=[additional_alias],
+            setup_ilm_policy=False,
+        )
+
+        try:
+            sink.setup()
+
+            # Write a record to trigger index creation from template
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": "Test message",
+                        "level": "INFO",
+                        "logger": "test",
+                    }
+                ]
+            )
+
+            # Wait for index to be created
+            wait_for_docs(es_client, f"{unique_index_prefix}-*", 1)
+
+            # Both aliases should exist - the primary write alias
+            assert es_client.indices.exists_alias(name=unique_index_prefix)
+        finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
+            cleanup_template(es_client, f"{unique_index_prefix}-template")
+            cleanup_alias(es_client, unique_index_prefix)
+            cleanup_alias(es_client, additional_alias)
+
+    def test_write_to_alias(self, es_client: Elasticsearch, unique_index_prefix: str):
+        """Test that writes go to the alias (not a dated index)."""
+        sink = ElasticsearchSink(
+            client=es_client,
+            index_prefix=unique_index_prefix,
+            setup_ilm_policy=False,
+        )
+
+        try:
+            sink.setup()
+
+            # Write a record
+            sink.write_batch(
+                [
+                    {
+                        "@timestamp": "2026-01-06T12:00:00.000000+00:00",
+                        "message": "Test message",
+                        "level": "INFO",
+                        "logger": "test",
+                    }
+                ]
+            )
+
+            # Document should be in the initial index via the alias
+            docs = wait_for_docs(es_client, f"{unique_index_prefix}-000001", 1)
+            assert len(docs) == 1
+            assert docs[0]["message"] == "Test message"
+        finally:
+            cleanup_indices(es_client, f"{unique_index_prefix}-*")
+            cleanup_template(es_client, f"{unique_index_prefix}-template")
+            cleanup_alias(es_client, unique_index_prefix)
